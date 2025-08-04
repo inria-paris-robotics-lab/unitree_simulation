@@ -17,7 +17,7 @@ class Go2Simulation(Node):
 
         ########################### State publisher
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
-        self.odometry_publisher = self.create_publisher(Odometry, "/odometry/filtered", 10)
+        self.odometry_publisher = self.create_publisher(Odometry, "/odometry/sim/filtered", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # Timer to publish periodically
@@ -113,7 +113,7 @@ class Go2Simulation(Node):
         # Odometry / state estimation
         odometry_msg.header.stamp = timestamp
         odometry_msg.header.frame_id = "odom"
-        odometry_msg.child_frame_id = "base"
+        odometry_msg.child_frame_id = "base_sim"
         odometry_msg.pose.pose.position.x = self.q_current[0]
         odometry_msg.pose.pose.position.y = self.q_current[1]
         odometry_msg.pose.pose.position.z = self.q_current[2]
@@ -132,7 +132,7 @@ class Go2Simulation(Node):
         # Forwar odometry on tf
         transform_msg.header.stamp = timestamp
         transform_msg.header.frame_id = "odom"
-        transform_msg.child_frame_id = "base"
+        transform_msg.child_frame_id = "base_sim"
         transform_msg.transform.translation.x = self.q_current[0]
         transform_msg.transform.translation.y = self.q_current[1]
         transform_msg.transform.translation.z = self.q_current[2]
@@ -142,12 +142,12 @@ class Go2Simulation(Node):
         transform_msg.transform.rotation.w = self.q_current[6]
         self.tf_broadcaster.sendTransform(transform_msg)
 
-        # Check that the simulator is on time
-        if self.timer.time_until_next_call() < 0:
-            ratio = 1.0 - self.timer.time_until_next_call() * 1e-9 / self.high_level_period
-            self.get_logger().warn(
-                "Simulator running slower than real time! Real time ratio : %.2f " % ratio, throttle_duration_sec=0.1
-            )
+        # # Check that the simulator is on time
+        # if self.timer.time_until_next_call() < 0:
+        #     ratio = 1.0 - self.timer.time_until_next_call() * 1e-9 / self.high_level_period
+        #     self.get_logger().warn(
+        #         "Simulator running slower than real time! Real time ratio : %.2f " % ratio, throttle_duration_sec=0.1
+        #     )
 
     def receive_cmd_cb(self, msg):
         self.last_cmd_msg = msg
