@@ -149,16 +149,17 @@ class Go2Simulator(Node):
         # Convert to body frame
         R = np.array(pybullet.getMatrixFromQuaternion(orientation), dtype=np.float32).reshape(3, 3)
 
-        if self.i % 5 == 0:
+        if self.i % 50 == 0:
             self.robot_T[:3, :3] = R[:]
             self.robot_T[:3, 3] = position[:]
             self.robot_T[3, 3] = 1
 
+            up_vec = (R @ np.array([0., 0., 1.])).tolist()
             camera_eye_w    = self.robot_T @ self.camera_eye_b
             camera_target_w = self.robot_T @ self.camera_target_b
 
             view_matrix = pybullet.computeViewMatrix(
-                    camera_eye_w.tolist()[:3], camera_target_w.tolist()[:3], [0., 0., 1.]
+                    camera_eye_w.tolist()[:3], camera_target_w.tolist()[:3], up_vec
             ) 
             
             projection_matrix = pybullet.computeProjectionMatrixFOV(
@@ -174,8 +175,9 @@ class Go2Simulator(Node):
                 view_matrix,
                 projection_matrix,
                 pybullet.ER_NO_SEGMENTATION_MASK
-            ) 
+            )
             ros_image_msg = self.bridge.cv2_to_imgmsg(im[3], encoding='32FC1')
+            ros_image_msg.header.stamp = timestamp
             ros_image_msg.header.frame_id = str(self.i)
             self.image_publisher.publish(ros_image_msg)
 
@@ -201,7 +203,6 @@ class Go2Simulator(Node):
         self.last_lin_vel[:] = linear_vel
         new_lin_acc += gravity
         low_msg.imu_state.accelerometer[:] = new_lin_acc
-        norm = np.linalg.norm(new_lin_acc)
 
         # Update feet contact states
         for i, (joint_idx, link_name) in enumerate(self.feet_idx):
