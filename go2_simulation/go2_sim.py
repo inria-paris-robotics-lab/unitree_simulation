@@ -3,6 +3,8 @@ import pybullet_data
 import rclpy
 from rclpy.node import Node
 from unitree_go.msg import LowState, LowCmd
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 
 import numpy as np
 from example_robot_data import getModelPath
@@ -22,6 +24,9 @@ class Go2Simulator(Node):
         self.last_cmd_msg = LowCmd()
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
 
+        self.last_image_msg = Image() 
+        self.bridge = CvBridge()
+        self.image_publisher = self.create_publisher(Image, "/camera", 10)
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -52,13 +57,17 @@ class Go2Simulator(Node):
         else:
             pybullet.connect(pybullet.GUI)
 
+        # pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_GUI,0)
+        # pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
+
+
         # Load robot
         self.get_logger().info(f"go2_simulator::loading urdf : {self.robot_path}")
         self.robot = pybullet.loadURDF(self.robot_path, [0, 0, 0.4])
         self.get_logger().info(f"go2_simulator::loading urdf : {self.robot}")
 
         # Load track
-        self.ramp_id = pybullet.loadURDF("/home/ugokbaka/Workspace/unitree_ros2/cyclonedds_ws/src/go2_simulation/data/assets/track.urdf", [1, 0.2, -0.3])
+        self.ramp_id = pybullet.loadURDF("/home/hamlet/Workspace/unitree_ros2/cyclonedds_ws/src/go2_simulation/data/assets/track.urdf", [1, 0.2, -0.3])
 
         # Print joint names
         num_joints = pybullet.getNumJoints(self.robot)
@@ -96,6 +105,14 @@ class Go2Simulator(Node):
         for i, id in enumerate(self.j_idx):
             pybullet.resetJointState(self.robot, id, self.q0[i], 0.0)
 
+        # Set up the camera
+        self.camera_eye_b = np.array([0.4, 0.0, 0.03, 1.])
+        self.camera_target_b = np.array([0.7, 0.0, 0.03, 1.])
+        self.camera_height_px = 48
+        self.camera_width_px  = 85
+        self.camera_horizontal_fov = 87.0
+        self.camera_pitch = 0
+
         # gravity and feet friction
         pybullet.setGravity(0, 0, -9.81)
 
@@ -108,9 +125,12 @@ class Go2Simulator(Node):
             forces=[0. for i in range(12)],
         )
 
+        self.robot_T = np.zeros((4, 4))
+        
+        self.buf = np.zeros((6, 148, 85))
+
     def update(self):
         low_msg = LowState()
-
         timestamp = self.get_clock().now().to_msg()
 
         # Read sensors
@@ -128,6 +148,38 @@ class Go2Simulator(Node):
 
         # Convert to body frame
         R = np.array(pybullet.getMatrixFromQuaternion(orientation), dtype=np.float32).reshape(3, 3)
+
+        if self.i % 5 == 0:
+            self.robot_T[:3, :3] = R[:]
+            self.robot_T[:3, 3] = position[:]
+            self.robot_T[3, 3] = 1
+
+            camera_eye_w    = self.robot_T @ self.camera_eye_b
+            camera_target_w = self.robot_T @ self.camera_target_b
+
+            view_matrix = pybullet.computeViewMatrix(
+                    camera_eye_w.tolist()[:3], camera_target_w.tolist()[:3], [0., 0., 1.]
+            ) 
+            
+            projection_matrix = pybullet.computeProjectionMatrixFOV(
+                    self.camera_horizontal_fov,
+                    self.camera_width_px / self.camera_height_px,
+                    0.01,
+                    10.,
+            )
+
+            im = pybullet.getCameraImage(
+                self.camera_width_px,
+                self.camera_height_px,
+                view_matrix,
+                projection_matrix,
+                pybullet.ER_NO_SEGMENTATION_MASK
+            ) 
+            ros_image_msg = self.bridge.cv2_to_imgmsg(im[3], encoding='32FC1')
+            ros_image_msg.header.frame_id = str(self.i)
+            self.image_publisher.publish(ros_image_msg)
+
+
         linear_vel = np.dot(R.T, linear_vel).astype(np.float32)
         angular_vel = np.dot(R.T, angular_vel).astype(np.float32)
 
@@ -188,6 +240,8 @@ class Go2Simulator(Node):
 
             # Advance simulation by one step
             pybullet.stepSimulation()
+
+        self.i += 1
 
     def receive_cmd_cb(self, msg):
         self.last_cmd_msg = msg
