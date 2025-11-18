@@ -1,6 +1,8 @@
 import pybullet
 import pybullet_data
 import rclpy
+import time
+
 from rclpy.node import Node
 from unitree_go.msg import LowState, LowCmd
 from sensor_msgs.msg import Image
@@ -26,7 +28,7 @@ class Go2Simulator(Node):
 
         self.last_image_msg = Image() 
         self.bridge = CvBridge()
-        self.image_publisher = self.create_publisher(Image, "/camera", 10)
+        self.image_publisher = self.create_publisher(Image, "/camera/image_depth", 10)
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -53,9 +55,9 @@ class Go2Simulator(Node):
         cid = pybullet.connect(pybullet.SHARED_MEMORY)
         self.get_logger().info(f"go2_simulator::pybullet:: cid={cid} ")
         if (cid < 0):
-            pybullet.connect(pybullet.GUI, options="--opengl3")
+            pybullet.connect(pybullet.DIRECT, options="--opengl3")
         else:
-            pybullet.connect(pybullet.GUI)
+            pybullet.connect(pybullet.DIRECT)
 
         # pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_GUI,0)
         # pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
@@ -67,7 +69,7 @@ class Go2Simulator(Node):
         self.get_logger().info(f"go2_simulator::loading urdf : {self.robot}")
 
         # Load track
-        self.ramp_id = pybullet.loadURDF("/home/hamlet/Workspace/unitree_ros2/cyclonedds_ws/src/go2_simulation/data/assets/track.urdf", [1, 0.2, -0.3])
+        self.ramp_id = pybullet.loadURDF("/home/ugokbaka/Workspace/unitree_ros2/cyclonedds_ws/src/go2_simulation/data/assets/track.urdf", [1, 0.2, -0.3])
 
         # Print joint names
         num_joints = pybullet.getNumJoints(self.robot)
@@ -161,24 +163,31 @@ class Go2Simulator(Node):
             view_matrix = pybullet.computeViewMatrix(
                     camera_eye_w.tolist()[:3], camera_target_w.tolist()[:3], up_vec
             ) 
+
+            near  = 0.04
+            far = 1.
             
             projection_matrix = pybullet.computeProjectionMatrixFOV(
                     self.camera_horizontal_fov,
                     self.camera_width_px / self.camera_height_px,
-                    0.01,
-                    10.,
+                    near,
+                    far,
             )
 
-            im = pybullet.getCameraImage(
+            depth = pybullet.getCameraImage(
                 self.camera_width_px,
                 self.camera_height_px,
                 view_matrix,
                 projection_matrix,
                 pybullet.ER_NO_SEGMENTATION_MASK
-            )
-            ros_image_msg = self.bridge.cv2_to_imgmsg(im[3], encoding='32FC1')
+                )[3][..., 19:-18]
+            depth = far * near / (far - (far - near) * depth) // depth
+            depth = 255 * (depth - near) / (far - near)
+            depth = np.clip(depth, 0., 255.)#.astype(np.uint8)
+            breakpoint() 
+            ros_image_msg = self.bridge.cv2_to_imgmsg(depth, encoding='32FC1')
             ros_image_msg.header.stamp = timestamp
-            ros_image_msg.header.frame_id = str(self.i)
+            ros_image_msg.header.frame_id = 'base_link'
             self.image_publisher.publish(ros_image_msg)
 
 
