@@ -28,7 +28,7 @@ class Go2Simulator(Node):
 
         self.last_image_msg = Image() 
         self.bridge = CvBridge()
-        self.image_publisher = self.create_publisher(Image, "/camera/image_depth", 10)
+        self.image_publisher = self.create_publisher(Image, "/camera", 10)
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -55,9 +55,9 @@ class Go2Simulator(Node):
         cid = pybullet.connect(pybullet.SHARED_MEMORY)
         self.get_logger().info(f"go2_simulator::pybullet:: cid={cid} ")
         if (cid < 0):
-            pybullet.connect(pybullet.DIRECT, options="--opengl3")
+            pybullet.connect(pybullet.GUI, options="--opengl3")
         else:
-            pybullet.connect(pybullet.DIRECT)
+            pybullet.connect(pybullet.GUI)
 
         # pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_GUI,0)
         # pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
@@ -181,10 +181,9 @@ class Go2Simulator(Node):
                 projection_matrix,
                 pybullet.ER_NO_SEGMENTATION_MASK
                 )[3][..., 19:-18]
-            depth = far * near / (far - (far - near) * depth) // depth
+            depth = far * near / (far - (far - near) * depth) / depth
             depth = 255 * (depth - near) / (far - near)
             depth = np.clip(depth, 0., 255.)#.astype(np.uint8)
-            breakpoint() 
             ros_image_msg = self.bridge.cv2_to_imgmsg(depth, encoding='32FC1')
             ros_image_msg.header.stamp = timestamp
             ros_image_msg.header.frame_id = 'base_link'
