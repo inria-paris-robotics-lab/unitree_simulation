@@ -21,7 +21,10 @@ class Go2Simulator(Node):
         
         # self.q0 = [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5]
         self.q0 = [0.0, 1.00, -2.51, 0.0, 1.09, -2.61, 0.2, 1.19, -2.59, -0.2, 1.32, -2.79] # Bullet order
+        self.nominal_pose = np.array([0.05, 0.6, -1.2, -0.05, 0.6, -1.2, 0.05, 0.6, -1.2, -0.05, 0.6, -1.2])
+        self.q0 = self.nominal_pose.tolist()
 
+        self.q0 = [-1.1, -0.58, 0.36, 1.1, 2.9, -0.35, -1.1, 1.1, -1.2, -1, 2.6, 0.36]
         ########################### State
         self.last_cmd_msg = LowCmd()
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
@@ -33,14 +36,15 @@ class Go2Simulator(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # Timer to publish periodically
-        self.high_level_period = 1./500  # seconds
-        self.low_level_sub_step = 12
+        self.high_level_period = 1./200  # seconds
+        self.low_level_sub_step = 6
 
         ########################## Cmd
         self.create_subscription(LowCmd, "/lowcmd", self.receive_cmd_cb, 10)
 
         robot_subpath = "go2_description/urdf/go2.urdf"
         self.robot_path = os.path.join(getModelPath(robot_subpath), robot_subpath)
+        self.robot_path = "/home/ugokbaka/Workspace/reinforcement-learning/SoloParkour/go2/go2.urdf"
         self.robot = 0
         self.init_pybullet()
 
@@ -74,6 +78,7 @@ class Go2Simulator(Node):
         # Print joint names
         num_joints = pybullet.getNumJoints(self.robot)
         feet_names = [name + '_foot' for name in ("FR", "FL", "RR", "RL")]
+        feet_names = [name + '_foot' for name in ("FR", "FL", "HR", "HL")]
         self.feet_idx = [-1] * len(feet_names)
 
         for i in range(num_joints):
@@ -97,7 +102,12 @@ class Go2Simulator(Node):
 
         UNITREE_ORDER = ["FR_hip_joint", "FR_thigh_joint", "FR_calf_joint", "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint", "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint", "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint"]
         ISAAC_ORDER = ["FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint", "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint", "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint"]
-        self.joint_order = UNITREE_ORDER
+        PARKOUR_ORDER = ["FL_hip_joint", "FL_thigh_joint", "FL_calf_joint", "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint", "RL_hip_joint",  "RL_thigh_joint", "RL_calf_joint",  "RR_hip_joint",   "RR_thigh_joint", "RR_calf_joint"]
+
+        self.joint_order = PARKOUR_ORDER
+        print(f'{self.joint_order=}')
+        self.joint_order = [k.replace('RL_', 'HL_').replace('RR_', 'HR_').replace('_hip_joint', '_HAA').replace('_thigh_joint', '_HFE').replace('_calf_joint', '_KFE') for k in self.joint_order]
+        print(f'{self.joint_order=}')
 
         self.j_idx = []
         for j in self.joint_order:
@@ -106,7 +116,8 @@ class Go2Simulator(Node):
 
         for i, id in enumerate(self.j_idx):
             pybullet.resetJointState(self.robot, id, self.q0[i], 0.0)
-
+    
+        breakpoint()
         # Set up the camera
         self.camera_eye_b = np.array([0.4, 0.0, 0.03, 1.])
         self.camera_target_b = np.array([0.7, 0.0, 0.03, 1.])
@@ -131,6 +142,10 @@ class Go2Simulator(Node):
         
         self.buf = np.zeros((6, 148, 85))
 
+        self.joint_q = np.zeros(12)
+        
+        self.act_buf = np.load('/home/ugokbaka/Workspace/reinforcement-learning/SoloParkour/actions.npz')['arr_0']
+
     def update(self):
         low_msg = LowState()
         timestamp = self.get_clock().now().to_msg()
@@ -142,7 +157,8 @@ class Go2Simulator(Node):
         for joint_idx, joint_state in enumerate(joint_states):
             low_msg.motor_state[joint_idx].mode = 1
             low_msg.motor_state[joint_idx].q = joint_state[0]
-            low_msg.motor_state[joint_idx].dq = joint_state[1]
+            low_msg.motor_state[joint_idx].dq = (joint_state[0] - self.joint_q[joint_idx]) / self.high_level_period
+            self.joint_q[joint_idx] = joint_state[0]
 
         # Read IMU
         position, orientation = pybullet.getBasePositionAndOrientation(self.robot) # world frame
@@ -171,7 +187,7 @@ class Go2Simulator(Node):
                     self.camera_horizontal_fov,
                     self.camera_width_px / self.camera_height_px,
                     near,
-                    far,
+                    far
             )
 
             depth = pybullet.getCameraImage(
@@ -183,8 +199,8 @@ class Go2Simulator(Node):
                 )[3][..., 19:-18]
             depth = far * near / (far - (far - near) * depth) / depth
             depth = 255 * (depth - near) / (far - near)
-            depth = np.clip(depth, 0., 255.)#.astype(np.uint8)
-            ros_image_msg = self.bridge.cv2_to_imgmsg(depth, encoding='32FC1')
+            depth = np.clip(depth, 0, 500).astype(np.uint8)
+            ros_image_msg = self.bridge.cv2_to_imgmsg(depth, encoding='mono8')
             ros_image_msg.header.stamp = timestamp
             ros_image_msg.header.frame_id = 'base_link'
             self.image_publisher.publish(ros_image_msg)
@@ -193,24 +209,14 @@ class Go2Simulator(Node):
         linear_vel = np.dot(R.T, linear_vel).astype(np.float32)
         angular_vel = np.dot(R.T, angular_vel).astype(np.float32)
 
+        low_msg.imu_state.accelerometer[:] = linear_vel
+        print(f"linear_vel={[*linear_vel.tolist()]}")
+
         # Bullet uses [x,y,z,w] quaternions while /lowstate expects [w,x,y,z]
         low_msg.imu_state.quaternion[0] = orientation[-1]
         low_msg.imu_state.quaternion[1:] = orientation[0:3]
         low_msg.imu_state.gyroscope = angular_vel
-
-        new_lin_acc = np.zeros(3, dtype=np.float32)
-        new_lin_acc[:] = (np.array(linear_vel) - self.last_lin_vel) / self.high_level_period
-        new_lin_acc[:] = new_lin_acc * 0.025 + self.last_lin_acc * 0.975
-
-        # Get gravity vector from orientation
-        gravity = np.array([0, 0, +9.81])
-
-        gravity = np.dot(R, gravity)
-
-        self.last_lin_acc[:] = new_lin_acc
-        self.last_lin_vel[:] = linear_vel
-        new_lin_acc += gravity
-        low_msg.imu_state.accelerometer[:] = new_lin_acc
+        print(f"angular_vel={[*angular_vel.tolist()]}\n\n\n")
 
         # Update feet contact states
         for i, (joint_idx, link_name) in enumerate(self.feet_idx):
@@ -223,7 +229,8 @@ class Go2Simulator(Node):
         # Robot state
         self.lowstate_publisher.publish(low_msg)
 
-        q_des   = np.array([self.last_cmd_msg.motor_cmd[i].q   for i in range(12)])
+        # q_des = self.nominal_pose + 0.5 * self.act_buf[self.i // 10]
+        q_des = np.array([self.last_cmd_msg.motor_cmd[i].q   for i in range(12)])
         v_des   = np.array([self.last_cmd_msg.motor_cmd[i].dq  for i in range(12)]) * 0 # No velocity control
         tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)]) * 0 # No torque control
         kp_des  = np.array([self.last_cmd_msg.motor_cmd[i].kp  for i in range(12)])
@@ -235,6 +242,8 @@ class Go2Simulator(Node):
             q = np.array([joint_state[0] for joint_state in joint_states])
             v = np.array([joint_state[1] for joint_state in joint_states])
 
+            # kp_des = 25.
+            # kd_des = 0.5
             tau_cmd = tau_des - np.multiply(q-q_des, kp_des) - np.multiply(v-v_des, kd_des)
             # Clip torque command
             tau_cmd = np.clip(tau_cmd, -25, 25) # Nm, torque limit
