@@ -1,5 +1,5 @@
 import numpy as np
-from go2_description import GO2_DESCRIPTION_URDF_PATH
+from go2_description import G1_DESCRIPTION_URDF_PATH
 import pybullet
 import pybullet_data
 from scipy.spatial.transform import Rotation as R
@@ -21,7 +21,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
             pybullet.connect(pybullet.GUI)
 
         # Load robot
-        self.robot = pybullet.loadURDF(GO2_DESCRIPTION_URDF_PATH, [0, 0, 0.4])
+        self.robot = pybullet.loadURDF(G1_DESCRIPTION_URDF_PATH, [0, 0, 0.4])
         self.localInertiaPos = pybullet.getDynamicsInfo(self.robot, -1)[3]
 
         # Load ground plane and other obstacles
@@ -41,27 +41,42 @@ class BulletWrapper(AbstractSimulatorWrapper):
         pybullet.setTimeStep(timestep)
 
         # Prepare joint ordering
-        self.joint_order = [
-            "FR_hip_joint",
-            "FR_thigh_joint",
-            "FR_calf_joint",
-            "FL_hip_joint",
-            "FL_thigh_joint",
-            "FL_calf_joint",
-            "RR_hip_joint",
-            "RR_thigh_joint",
-            "RR_calf_joint",
-            "RL_hip_joint",
-            "RL_thigh_joint",
-            "RL_calf_joint",
+        self.joint_name_ros_order = [
+            "left_hip_pitch_joint",
+            "left_hip_roll_joint",
+            "left_hip_yaw_joint",
+            "left_knee_joint",
+            "left_ankle_pitch_joint",
+            "left_ankle_roll_joint",
+            "right_hip_pitch_joint",
+            "right_hip_roll_joint",
+            "right_hip_yaw_joint",
+            "right_knee_joint",
+            "right_ankle_pitch_joint",
+            "right_ankle_roll_joint",
+            "waist_yaw_joint",
+            "waist_roll_joint",
+            "waist_pitch_joint",
+            "left_shoulder_pitch_joint",
+            "left_shoulder_roll_joint",
+            "left_shoulder_yaw_joint",
+            "left_elbow_joint",
+            "left_wrist_roll_joint",
+            "left_wrist_pitch_joint",
+            "left_wrist_yaw_joint",
+            "right_shoulder_pitch_joint",
+            "right_shoulder_roll_joint",
+            "right_shoulder_yaw_joint",
+            "right_elbow_joint",
+            "right_wrist_roll_joint",
+            "right_wrist_pitch_joint",
+            "right_wrist_yaw_joint",
         ]
-        self.j_idx = []
-        for j in self.joint_order:
-            self.j_idx.append(self.get_joint_id(j))
+        self.joint_bullet_id = [self.get_joint_id(joint_name) for joint_name in self.joint_name_ros_order]
 
         # Feet ids
         num_joints = pybullet.getNumJoints(self.robot)
-        feet_names = [name + "_foot" for name in ("FR", "FL", "RR", "RL")]
+        feet_names = [name + "_foot" for name in ()]
         self.feet_idx = [-1] * len(feet_names)
 
         for i in range(num_joints):
@@ -72,9 +87,11 @@ class BulletWrapper(AbstractSimulatorWrapper):
                 self.feet_idx[foot_id] = (i, link_name)
 
         # Set robot initial config on the ground
-        initial_q = [0.0, 1.00, -2.1, 0.0, 1.00, -2.1, 0, 1.00, -2.1, 0, 1.00, -2.1]
-        for i, id in enumerate(self.j_idx):
-            pybullet.resetJointState(self.robot, id, initial_q[i])
+        initial_q = [0., 0., 0.80, 0., 0., 0., 1.] + [0.] * 29
+        pybullet.resetBasePositionAndOrientation(self.robot, initial_q[:3], initial_q[3:7])
+        for i, id in enumerate(self.joint_bullet_id):
+            if id:
+                pybullet.resetJointState(self.robot, id, initial_q[7+i])
 
         # gravity and feet friction
         pybullet.setGravity(0, 0, -9.81)
@@ -82,10 +99,10 @@ class BulletWrapper(AbstractSimulatorWrapper):
         # Somehow this disable joint friction
         pybullet.setJointMotorControlArray(
             bodyIndex=self.robot,
-            jointIndices=self.j_idx,
+            jointIndices=[joint_id for joint_id in self.joint_bullet_id if joint_id is not None],
             controlMode=pybullet.VELOCITY_CONTROL,
-            targetVelocities=[0.0 for i in range(12)],
-            forces=[0.0 for i in range(12)],
+            targetVelocities=[0. for joint_id in self.joint_bullet_id if joint_id is not None],
+            forces=[0. for joint_id in self.joint_bullet_id if joint_id is not None],
         )
 
         # Finite differences to compute acceleration
@@ -93,26 +110,39 @@ class BulletWrapper(AbstractSimulatorWrapper):
         self.v_last = None
 
     def get_joint_id(self, joint_name):
+        '''
+           Returns the pybullet id of the first **non-fixed** joint that match `joint_name`.
+           Returns None otherwise 
+        '''
         num_joints = pybullet.getNumJoints(self.robot)
         for i in range(num_joints):
             joint_info = pybullet.getJointInfo(self.robot, i)
-            if joint_info[1].decode("utf-8") == joint_name:
-                return i
+            if joint_info[2] == pybullet.JOINT_FIXED:
+                continue
+            if joint_info[1].decode("utf-8") != joint_name:
+                continue
+            return i
         return None  # Joint name not found
 
     def step(self, tau_cmd):
         # Set actuation
         pybullet.setJointMotorControlArray(
-            bodyIndex=self.robot, jointIndices=self.j_idx, controlMode=pybullet.TORQUE_CONTROL, forces=tau_cmd
+            bodyIndex=self.robot, jointIndices=[joint_id for joint_id in self.joint_bullet_id if joint_id is not None], controlMode=pybullet.TORQUE_CONTROL, forces=[tau_cmd[i] for i, joint_id in enumerate(self.joint_bullet_id) if joint_id is not None]
         )
 
         # Advance simulation by one step
         pybullet.stepSimulation()
 
         # Get new state
-        joint_states = pybullet.getJointStates(self.robot, self.j_idx)
-        joint_position = np.array([joint_state[0] for joint_state in joint_states])
-        joint_velocity = np.array([joint_state[1] for joint_state in joint_states])
+        joint_states_bullet = pybullet.getJointStates(self.robot, [joint_id for joint_id in self.joint_bullet_id if joint_id is not None])
+        joint_position = np.zeros(len(self.joint_bullet_id))
+        joint_velocity = np.zeros(len(self.joint_bullet_id))
+        j = 0
+        for i, bullet_id in enumerate(self.joint_bullet_id):
+            if bullet_id is not None:
+                joint_position[i] = joint_states_bullet[j][0]
+                joint_velocity[i] = joint_states_bullet[j][1]
+                j += 1
 
         linear_pose, angular_pose = pybullet.getBasePositionAndOrientation(self.robot)
         linear_vel, angular_vel = pybullet.getBaseVelocity(self.robot)  # Local world aligned frame
@@ -130,8 +160,8 @@ class BulletWrapper(AbstractSimulatorWrapper):
 
         q_current = np.concatenate((np.array(linear_pose), np.array(angular_pose), joint_position))
         v_current = np.concatenate((np.array(linear_vel), np.array(angular_vel), joint_velocity))
-        a_current = ((v_current - self.v_last) / self.dt) if self.v_last is not None else np.zeros(6 + 12)
-        f_current = np.zeros(4)
+        a_current = ((v_current - self.v_last) / self.dt) if self.v_last is not None else np.zeros(6 + 29)
+        f_current = np.zeros(0)
 
         self.v_last = v_current
 

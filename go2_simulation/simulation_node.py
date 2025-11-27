@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from unitree_go.msg import LowState, LowCmd
+from unitree_hg.msg import LowState, LowCmd
 from nav_msgs.msg import Odometry
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -46,18 +46,18 @@ class Go2Simulation(Node):
             self.get_logger().error("Simulation tool not recognized")
 
         ########################## Initial state
-        self.q_current = np.zeros(7 + 12)
-        self.v_current = np.zeros(6 + 12)
-        self.a_current = np.zeros(6 + 12)
+        self.q_current = np.zeros(7 + 29)
+        self.v_current = np.zeros(6 + 29)
+        self.a_current = np.zeros(6 + 29)
         self.f_current = np.zeros(4)
 
     def update(self):
         ## Control robot
-        q_des = np.array([self.last_cmd_msg.motor_cmd[i].q for i in range(12)])
-        v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq for i in range(12)])
-        tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)])
-        kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp for i in range(12)])
-        kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(12)])
+        q_des = np.array([self.last_cmd_msg.motor_cmd[i].q for i in range(29)])
+        v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq for i in range(29)])
+        tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(29)])
+        kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp for i in range(29)])
+        kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(29)])
 
         for _ in range(self.low_level_sub_step):
             # Iterate to simulate motor internal controller
@@ -77,14 +77,14 @@ class Go2Simulation(Node):
         timestamp = self.get_clock().now().to_msg()
 
         # Format motor readings
-        for joint_idx in range(12):
+        for joint_idx in range(29):
             low_msg.motor_state[joint_idx].mode = 1
             low_msg.motor_state[joint_idx].q = self.q_current[7 + joint_idx]
             low_msg.motor_state[joint_idx].dq = self.v_current[6 + joint_idx]
 
-        # Contact sensors reading
-        ## See https://github.com/inria-paris-robotics-lab/go2_simulation/issues/6
-        low_msg.foot_force = (14.2 * np.ones(4) + 0.562 * self.f_current).astype(np.int32).tolist()
+        # # Contact sensors reading
+        # ## See https://github.com/inria-paris-robotics-lab/go2_simulation/issues/6
+        # low_msg.foot_force = (14.2 * np.ones(4) + 0.562 * self.f_current).astype(np.int32).tolist()
 
         # Format IMU
         quat_xyzw = self.q_current[3:7].tolist()
