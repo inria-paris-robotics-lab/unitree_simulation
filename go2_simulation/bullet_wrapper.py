@@ -87,11 +87,11 @@ class BulletWrapper(AbstractSimulatorWrapper):
                 self.feet_idx[foot_id] = (i, link_name)
 
         # Set robot initial config on the ground
-        initial_q = [0., 0., 0.80, 0., 0., 0., 1.] + [0.] * 29
+        initial_q = [0.0, 0.0, 0.80, 0.0, 0.0, 0.0, 1.0] + [0.0] * 29
         pybullet.resetBasePositionAndOrientation(self.robot, initial_q[:3], initial_q[3:7])
         for i, id in enumerate(self.joint_bullet_id):
             if id:
-                pybullet.resetJointState(self.robot, id, initial_q[7+i])
+                pybullet.resetJointState(self.robot, id, initial_q[7 + i])
 
         # gravity and feet friction
         pybullet.setGravity(0, 0, -9.81)
@@ -101,8 +101,8 @@ class BulletWrapper(AbstractSimulatorWrapper):
             bodyIndex=self.robot,
             jointIndices=[joint_id for joint_id in self.joint_bullet_id if joint_id is not None],
             controlMode=pybullet.VELOCITY_CONTROL,
-            targetVelocities=[0. for joint_id in self.joint_bullet_id if joint_id is not None],
-            forces=[0. for joint_id in self.joint_bullet_id if joint_id is not None],
+            targetVelocities=[0.0 for joint_id in self.joint_bullet_id if joint_id is not None],
+            forces=[0.0 for joint_id in self.joint_bullet_id if joint_id is not None],
         )
 
         # Finite differences to compute acceleration
@@ -110,10 +110,10 @@ class BulletWrapper(AbstractSimulatorWrapper):
         self.v_last = None
 
     def get_joint_id(self, joint_name):
-        '''
-           Returns the pybullet id of the first **non-fixed** joint that match `joint_name`.
-           Returns None otherwise 
-        '''
+        """
+        Returns the pybullet id of the first **non-fixed** joint that match `joint_name`.
+        Returns None otherwise
+        """
         num_joints = pybullet.getNumJoints(self.robot)
         for i in range(num_joints):
             joint_info = pybullet.getJointInfo(self.robot, i)
@@ -127,14 +127,19 @@ class BulletWrapper(AbstractSimulatorWrapper):
     def step(self, tau_cmd):
         # Set actuation
         pybullet.setJointMotorControlArray(
-            bodyIndex=self.robot, jointIndices=[joint_id for joint_id in self.joint_bullet_id if joint_id is not None], controlMode=pybullet.TORQUE_CONTROL, forces=[tau_cmd[i] for i, joint_id in enumerate(self.joint_bullet_id) if joint_id is not None]
+            bodyIndex=self.robot,
+            jointIndices=[joint_id for joint_id in self.joint_bullet_id if joint_id is not None],
+            controlMode=pybullet.TORQUE_CONTROL,
+            forces=[tau_cmd[i] for i, joint_id in enumerate(self.joint_bullet_id) if joint_id is not None],
         )
 
         # Advance simulation by one step
         pybullet.stepSimulation()
 
         # Get new state
-        joint_states_bullet = pybullet.getJointStates(self.robot, [joint_id for joint_id in self.joint_bullet_id if joint_id is not None])
+        joint_states_bullet = pybullet.getJointStates(
+            self.robot, [joint_id for joint_id in self.joint_bullet_id if joint_id is not None]
+        )
         joint_position = np.zeros(len(self.joint_bullet_id))
         joint_velocity = np.zeros(len(self.joint_bullet_id))
         j = 0
