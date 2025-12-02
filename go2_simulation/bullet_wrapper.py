@@ -41,7 +41,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
         pybullet.setTimeStep(timestep)
 
         # Prepare joint ordering
-        self.joint_name_ros_order = [
+        self.joint_name_unitree_order = [
             "left_hip_pitch_joint",
             "left_hip_roll_joint",
             "left_hip_yaw_joint",
@@ -72,7 +72,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
             "right_wrist_pitch_joint",
             "right_wrist_yaw_joint",
         ]
-        self.joint_bullet_id = [self.get_joint_id(joint_name) for joint_name in self.joint_name_ros_order]
+        self.joint_bullet_id = [self.get_joint_id(joint_name) for joint_name in self.joint_name_unitree_order]
 
         # Feet ids
         num_joints = pybullet.getNumJoints(self.robot)
