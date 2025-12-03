@@ -87,7 +87,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
                 self.feet_idx[foot_id] = (i, link_name)
 
         # Set robot initial config on the ground
-        initial_q = [0.0, 0.0, 0.80, 0.0, 0.0, 0.0, 1.0] + [0.0] * 29
+        initial_q = [0.0, 0.0, 0.74, 0.0, 0.0, 0.0, 1.0] + [0.0] * 29
         pybullet.resetBasePositionAndOrientation(self.robot, initial_q[:3], initial_q[3:7])
         for i, id in enumerate(self.joint_bullet_id):
             if id:
