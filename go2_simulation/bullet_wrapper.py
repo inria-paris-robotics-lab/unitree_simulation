@@ -11,7 +11,7 @@ import os
 class BulletWrapper(AbstractSimulatorWrapper):
     def __init__(self, node, timestep):
         self.node = node
-        
+
         # init pybullet
         cid = pybullet.connect(pybullet.SHARED_MEMORY)
         if cid < 0:
@@ -119,7 +119,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
             jointAxis=[0, 0, 0],
             parentFramePosition=[0, 0, 0],
             childFramePosition=pos,
-            childFrameOrientation=orn
+            childFrameOrientation=orn,
         )
 
     def unlock_base(self):

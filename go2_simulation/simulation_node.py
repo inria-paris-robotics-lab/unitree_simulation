@@ -49,11 +49,11 @@ class Go2Simulation(Node):
             exit()
 
         ########################## Unlock base
-        if(unlock_base is None):
+        if unlock_base is None:
             self.get_logger().error("Parameter 'unlock_base' not set!")
             exit()
 
-        if(unlock_base):
+        if unlock_base:
             self.simulator.unlock_base()
         else:
             self.create_subscription(Empty, "/unlock_base", lambda msg: self.simulator.unlock_base(), 1)
