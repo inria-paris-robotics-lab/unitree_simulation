@@ -9,6 +9,9 @@ def generate_launch_description():
     simulator_arg = DeclareLaunchArgument(
         "simulator", default_value="pybullet", description="Which simulator to use 'pybullet' or 'simple'"
     )
+    unlock_base_arg = DeclareLaunchArgument(
+        "unlock_base", default_value="False", description="should the robot base be free from start, or should it simulate being hanged first"
+    )
 
     # Node configuration
     go2_simulation_node = Node(
@@ -19,9 +22,10 @@ def generate_launch_description():
         parameters=[
             {
                 "simulator": LaunchConfiguration("simulator"),
+                "unlock_base": LaunchConfiguration("unlock_base"),
             }
         ],
     )
 
     # Launch description
-    return LaunchDescription([simulator_arg, go2_simulation_node])
+    return LaunchDescription([simulator_arg, unlock_base_arg, go2_simulation_node])

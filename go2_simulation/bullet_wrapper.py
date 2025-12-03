@@ -11,9 +11,8 @@ import os
 class BulletWrapper(AbstractSimulatorWrapper):
     def __init__(self, node, timestep):
         self.node = node
-        self.init_pybullet(timestep)
-
-    def init_pybullet(self, timestep):
+        
+        # init pybullet
         cid = pybullet.connect(pybullet.SHARED_MEMORY)
         if cid < 0:
             pybullet.connect(pybullet.GUI, options="--opengl3")
@@ -108,6 +107,23 @@ class BulletWrapper(AbstractSimulatorWrapper):
         # Finite differences to compute acceleration
         self.dt = timestep
         self.v_last = None
+
+        # Lock torso (as if the robot was hanged)
+        pos, orn = pybullet.getBasePositionAndOrientation(self.robot)
+        self.fixed_base_constraint = pybullet.createConstraint(
+            parentBodyUniqueId=self.robot,
+            parentLinkIndex=-1,
+            childBodyUniqueId=-1,
+            childLinkIndex=-1,
+            jointType=pybullet.JOINT_FIXED,
+            jointAxis=[0, 0, 0],
+            parentFramePosition=[0, 0, 0],
+            childFramePosition=pos,
+            childFrameOrientation=orn
+        )
+
+    def unlock_base(self):
+        pybullet.removeConstraint(self.fixed_base_constraint)
 
     def get_joint_id(self, joint_name):
         """

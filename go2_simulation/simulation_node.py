@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from unitree_hg.msg import LowState, LowCmd
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Empty
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
@@ -14,6 +15,7 @@ class Go2Simulation(Node):
     def __init__(self):
         super().__init__("go2_simulation")
         simulator_name = self.declare_parameter("simulator", rclpy.Parameter.Type.STRING).value
+        unlock_base = self.declare_parameter("unlock_base", rclpy.Parameter.Type.BOOL).value
 
         ########################### State publisher
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
@@ -43,7 +45,18 @@ class Go2Simulation(Node):
 
             self.simulator = BulletWrapper(self, timestep)
         else:
-            self.get_logger().error("Simulation tool not recognized")
+            self.get_logger().error("Simulation tool not recognized, please set parameter to 'simple' or 'pybullet'.")
+            exit()
+
+        ########################## Unlock base
+        if(unlock_base is None):
+            self.get_logger().error("Parameter 'unlock_base' not set!")
+            exit()
+
+        if(unlock_base):
+            self.simulator.unlock_base()
+        else:
+            self.create_subscription(Empty, "/unlock_base", lambda msg: self.simulator.unlock_base(), 1)
 
         ########################## Initial state
         self.q_current = np.zeros(7 + 29)
