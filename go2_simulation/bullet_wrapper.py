@@ -86,7 +86,13 @@ class BulletWrapper(AbstractSimulatorWrapper):
                 self.feet_idx[foot_id] = (i, link_name)
 
         # Set robot initial config on the ground
-        initial_q = [0.0, 0.0, 0.74, 0.0, 0.0, 0.0, 1.0] + [0.0] * 29
+        initial_q = [0.0, 0.0, 0.641, 0.0, 0.0, 0.0, 1.0] + [0.0] * 29
+        initial_q[7 + self.joint_name_unitree_order.index("left_hip_pitch_joint")] = -0.5
+        initial_q[7 + self.joint_name_unitree_order.index("right_hip_pitch_joint")] = -0.5
+        initial_q[7 + self.joint_name_unitree_order.index("left_knee_joint")] = 1.0
+        initial_q[7 + self.joint_name_unitree_order.index("right_knee_joint")] = 1.0
+        initial_q[7 + self.joint_name_unitree_order.index("left_ankle_pitch_joint")] = -0.5
+        initial_q[7 + self.joint_name_unitree_order.index("right_ankle_pitch_joint")] = -0.5
         pybullet.resetBasePositionAndOrientation(self.robot, initial_q[:3], initial_q[3:7])
         for i, id in enumerate(self.joint_bullet_id):
             if id:
