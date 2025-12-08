@@ -85,21 +85,30 @@ class BulletWrapper(AbstractSimulatorWrapper):
                 foot_id = feet_names.index(link_name)
                 self.feet_idx[foot_id] = (i, link_name)
 
-        # Set robot initial config on the ground
-        initial_q = [0.0, 0.0, 0.641, 0.0, 0.0, 0.0, 1.0] + [0.0] * 29
-        initial_q[7 + self.joint_name_unitree_order.index("left_hip_pitch_joint")] = -0.5
-        initial_q[7 + self.joint_name_unitree_order.index("right_hip_pitch_joint")] = -0.5
-        initial_q[7 + self.joint_name_unitree_order.index("left_knee_joint")] = 1.0
-        initial_q[7 + self.joint_name_unitree_order.index("right_knee_joint")] = 1.0
-        initial_q[7 + self.joint_name_unitree_order.index("left_ankle_pitch_joint")] = -0.5
-        initial_q[7 + self.joint_name_unitree_order.index("right_ankle_pitch_joint")] = -0.5
-        pybullet.resetBasePositionAndOrientation(self.robot, initial_q[:3], initial_q[3:7])
-        for i, id in enumerate(self.joint_bullet_id):
-            if id:
-                pybullet.resetJointState(self.robot, id, initial_q[7 + i])
+        self.q_start = [0.0, 0.0, 0.641, 0.0, 0.0, 0.0, 1.0] + [0.0] * 29
+        self.q_start[7 + self.joint_name_unitree_order.index("left_hip_pitch_joint")] = -0.5
+        self.q_start[7 + self.joint_name_unitree_order.index("right_hip_pitch_joint")] = -0.5
+        self.q_start[7 + self.joint_name_unitree_order.index("left_knee_joint")] = 1.0
+        self.q_start[7 + self.joint_name_unitree_order.index("right_knee_joint")] = 1.0
+        self.q_start[7 + self.joint_name_unitree_order.index("left_ankle_pitch_joint")] = -0.5
+        self.q_start[7 + self.joint_name_unitree_order.index("right_ankle_pitch_joint")] = -0.5
 
         # gravity and feet friction
         pybullet.setGravity(0, 0, -9.81)
+
+        # Finite differences to compute acceleration
+        self.dt = timestep
+        self.v_last = None
+
+        # Robot to intial state
+        self.reset()
+
+    def reset(self):
+        # Set robot initial config on the ground
+        pybullet.resetBasePositionAndOrientation(self.robot, self.q_start[:3], self.q_start[3:7])
+        for i, id in enumerate(self.joint_bullet_id):
+            if id:
+                pybullet.resetJointState(self.robot, id, self.q_start[7 + i])
 
         # Somehow this disable joint friction
         pybullet.setJointMotorControlArray(
@@ -109,10 +118,6 @@ class BulletWrapper(AbstractSimulatorWrapper):
             targetVelocities=[0.0 for joint_id in self.joint_bullet_id if joint_id is not None],
             forces=[0.0 for joint_id in self.joint_bullet_id if joint_id is not None],
         )
-
-        # Finite differences to compute acceleration
-        self.dt = timestep
-        self.v_last = None
 
         # Lock torso (as if the robot was hanged)
         pos, orn = pybullet.getBasePositionAndOrientation(self.robot)

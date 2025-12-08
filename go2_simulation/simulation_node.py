@@ -15,7 +15,7 @@ class Go2Simulation(Node):
     def __init__(self):
         super().__init__("go2_simulation")
         simulator_name = self.declare_parameter("simulator", rclpy.Parameter.Type.STRING).value
-        unlock_base = self.declare_parameter("unlock_base", rclpy.Parameter.Type.BOOL).value
+        self.unlock_base_default = self.declare_parameter("unlock_base", rclpy.Parameter.Type.BOOL).value
 
         ########################### State publisher
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
@@ -49,14 +49,16 @@ class Go2Simulation(Node):
             exit()
 
         ########################## Unlock base
-        if unlock_base is None:
+        if self.unlock_base_default is None:
             self.get_logger().error("Parameter 'unlock_base' not set!")
             exit()
 
-        if unlock_base:
+        if self.unlock_base_default:
             self.simulator.unlock_base()
         else:
             self.create_subscription(Empty, "/unlock_base", lambda msg: self.simulator.unlock_base(), 1)
+
+        self.create_subscription(Empty, "/reset", lambda msg: self.reset(), 1)
 
         ########################## Initial state
         self.q_current = np.zeros(7 + 29)
@@ -164,6 +166,11 @@ class Go2Simulation(Node):
 
     def receive_cmd_cb(self, msg):
         self.last_cmd_msg = msg
+
+    def reset(self):
+        self.simulator.reset()
+        if self.unlock_base_default:
+            self.simulator.unlock_base()
 
 
 def main(args=None):

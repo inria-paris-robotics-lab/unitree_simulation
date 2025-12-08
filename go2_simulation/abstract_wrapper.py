@@ -22,3 +22,9 @@ class AbstractSimulatorWrapper:
         This simulate that the real robot would start hanged by the shoulder. After the init procedure is over, the user would put the robot on the ground, which is what this method is modelling.
         """
         raise NotImplementedError
+
+    def reset() -> None:
+        """
+        Reset the simulation as if the simulator was just instantiated and ready to start. (Must re-lock the base for instance)
+        """
+        raise NotImplementedError
