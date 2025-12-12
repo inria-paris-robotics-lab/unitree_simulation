@@ -54,9 +54,9 @@ class Go2Simulation(Node):
             exit()
 
         if self.unlock_base_default:
-            self.simulator.unlock_base()
+            self.unlock_base()
         else:
-            self.create_subscription(Empty, "/unlock_base", lambda msg: self.simulator.unlock_base(), 1)
+            self.create_subscription(Empty, "/unlock_base", lambda msg: self.unlock_base(), 1)
 
         self.create_subscription(Empty, "/reset", lambda msg: self.reset(), 1)
 
@@ -171,6 +171,10 @@ class Go2Simulation(Node):
         self.simulator.reset()
         if self.unlock_base_default:
             self.simulator.unlock_base()
+
+    def unlock_base(self):
+        self.get_logger().info("Unlocking robot base")
+        self.simulator.unlock_base()
 
 
 def main(args=None):

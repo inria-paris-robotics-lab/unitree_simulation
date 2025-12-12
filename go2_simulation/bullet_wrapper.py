@@ -96,6 +96,9 @@ class BulletWrapper(AbstractSimulatorWrapper):
         # gravity and feet friction
         pybullet.setGravity(0, 0, -9.81)
 
+        # Locked base constraint ID
+        self.fixed_base_constraint = None
+
         # Finite differences to compute acceleration
         self.dt = timestep
         self.v_last = None
@@ -121,20 +124,23 @@ class BulletWrapper(AbstractSimulatorWrapper):
 
         # Lock torso (as if the robot was hanged)
         pos, orn = pybullet.getBasePositionAndOrientation(self.robot)
-        self.fixed_base_constraint = pybullet.createConstraint(
-            parentBodyUniqueId=self.robot,
-            parentLinkIndex=-1,
-            childBodyUniqueId=-1,
-            childLinkIndex=-1,
-            jointType=pybullet.JOINT_FIXED,
-            jointAxis=[0, 0, 0],
-            parentFramePosition=[0, 0, 0],
-            childFramePosition=pos,
-            childFrameOrientation=orn,
-        )
+        if self.fixed_base_constraint is None:
+            self.fixed_base_constraint = pybullet.createConstraint(
+                parentBodyUniqueId=self.robot,
+                parentLinkIndex=-1,
+                childBodyUniqueId=-1,
+                childLinkIndex=-1,
+                jointType=pybullet.JOINT_FIXED,
+                jointAxis=[0, 0, 0],
+                parentFramePosition=[0, 0, 0],
+                childFramePosition=pos,
+                childFrameOrientation=orn,
+            )
 
     def unlock_base(self):
-        pybullet.removeConstraint(self.fixed_base_constraint)
+        if self.fixed_base_constraint is not None:
+            pybullet.removeConstraint(self.fixed_base_constraint)
+            self.fixed_base_constraint = None
 
     def get_joint_id(self, joint_name):
         """
