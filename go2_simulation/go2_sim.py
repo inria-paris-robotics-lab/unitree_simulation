@@ -1,3 +1,4 @@
+import cv2
 import pybullet
 import pybullet_data
 import rclpy
@@ -15,16 +16,20 @@ import os
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 
+CAMERA_HEIGHT_PX = 60
+CAMERA_WIDTH_PX = 106
+CAMERA_FOV = 87.0
+NEAR_CLIP, FAR_CLIP = 0.01, 2.0
+
+assert NEAR_CLIP > 0.0 and FAR_CLIP > NEAR_CLIP, "Invalid clip plane settings."
+
 class Go2Simulator(Node):
     def __init__(self):
         super().__init__('go2_simulation')
         
-        # self.q0 = [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5]
-        self.q0 = [0.0, 1.00, -2.51, 0.0, 1.09, -2.61, 0.2, 1.19, -2.59, -0.2, 1.32, -2.79] # Bullet order
         self.nominal_pose = np.array([0.05, 0.6, -1.2, -0.05, 0.6, -1.2, 0.05, 0.6, -1.2, -0.05, 0.6, -1.2])
         self.q0 = self.nominal_pose.tolist()
 
-        self.q0 = [-1.1, -0.58, 0.36, 1.1, 2.9, -0.35, -1.1, 1.1, -1.2, -1, 2.6, 0.36]
         ########################### State
         self.last_cmd_msg = LowCmd()
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
@@ -54,6 +59,7 @@ class Go2Simulator(Node):
         self.last_lin_vel = np.zeros(3, dtype=np.float32)
         self.last_lin_acc = np.zeros(3, dtype=np.float32)
 
+        self.K_TORQUE_LIMIT = np.array([23.7, 23.7, 45.43, 23.7, 23.7, 45.43, 23.7, 23.7, 45.43, 23.7, 23.7, 45.43])
 
     def init_pybullet(self):
         cid = pybullet.connect(pybullet.SHARED_MEMORY)
@@ -71,9 +77,6 @@ class Go2Simulator(Node):
         self.get_logger().info(f"go2_simulator::loading urdf : {self.robot_path}")
         self.robot = pybullet.loadURDF(self.robot_path, [0, 0, 0.4])
         self.get_logger().info(f"go2_simulator::loading urdf : {self.robot}")
-
-        # Load track
-        self.ramp_id = pybullet.loadURDF("/home/ugokbaka/Workspace/unitree_ros2/cyclonedds_ws/src/go2_simulation/data/assets/track.urdf", [1, 0.2, -0.3])
 
         # Print joint names
         num_joints = pybullet.getNumJoints(self.robot)
@@ -96,18 +99,17 @@ class Go2Simulator(Node):
         # Load ground plane
         pybullet.setAdditionalSearchPath(pybullet_data.getDataPath())
         self.plane_id = pybullet.loadURDF("plane.urdf")
+        self.collision_ids = [self.plane_id]
+        self.load_obstacles()
+
         pybullet.resetBasePositionAndOrientation(self.plane_id, [0, 0, 0], [0, 0, 0, 1])
 
         pybullet.setTimeStep(self.high_level_period / self.low_level_sub_step)
 
         UNITREE_ORDER = ["FR_hip_joint", "FR_thigh_joint", "FR_calf_joint", "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint", "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint", "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint"]
-        ISAAC_ORDER = ["FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint", "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint", "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint"]
-        PARKOUR_ORDER = ["FL_hip_joint", "FL_thigh_joint", "FL_calf_joint", "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint", "RL_hip_joint",  "RL_thigh_joint", "RL_calf_joint",  "RR_hip_joint",   "RR_thigh_joint", "RR_calf_joint"]
 
-        self.joint_order = PARKOUR_ORDER
-        print(f'{self.joint_order=}')
+        self.joint_order = UNITREE_ORDER
         self.joint_order = [k.replace('RL_', 'HL_').replace('RR_', 'HR_').replace('_hip_joint', '_HAA').replace('_thigh_joint', '_HFE').replace('_calf_joint', '_KFE') for k in self.joint_order]
-        print(f'{self.joint_order=}')
 
         self.j_idx = []
         for j in self.joint_order:
@@ -117,15 +119,6 @@ class Go2Simulator(Node):
         for i, id in enumerate(self.j_idx):
             pybullet.resetJointState(self.robot, id, self.q0[i], 0.0)
     
-        breakpoint()
-        # Set up the camera
-        self.camera_eye_b = np.array([0.4, 0.0, 0.03, 1.])
-        self.camera_target_b = np.array([0.7, 0.0, 0.03, 1.])
-        self.camera_height_px = 48
-        self.camera_width_px  = 85
-        self.camera_horizontal_fov = 87.0
-        self.camera_pitch = 0
-
         # gravity and feet friction
         pybullet.setGravity(0, 0, -9.81)
 
@@ -139,13 +132,79 @@ class Go2Simulator(Node):
         )
 
         self.robot_T = np.zeros((4, 4))
-        
-        self.buf = np.zeros((6, 148, 85))
-
         self.joint_q = np.zeros(12)
-        
-        self.act_buf = np.load('/home/ugokbaka/Workspace/reinforcement-learning/SoloParkour/actions.npz')['arr_0']
 
+        self.camera_eye_b = np.array([0.35, 0.0, 0.1, 1.0])
+        self.camera_target_b = np.array([100.0, 0.0, 0.1, 1.0])
+
+    def get_camera_image(self, robot_T):
+        up_vec = (robot_T[:3, :3] @ np.array([0.0, 0.0, 1.0])).tolist()
+        camera_eye_w = robot_T @ self.camera_eye_b
+        camera_target_w = robot_T @ self.camera_target_b
+
+        view_matrix = pybullet.computeViewMatrix(
+            camera_eye_w.tolist()[:3], camera_target_w.tolist()[:3], up_vec
+        )
+
+        projection_matrix = pybullet.computeProjectionMatrixFOV(
+            CAMERA_FOV, CAMERA_WIDTH_PX / CAMERA_HEIGHT_PX, NEAR_CLIP, FAR_CLIP)
+        depth = pybullet.getCameraImage(
+            CAMERA_WIDTH_PX,
+            CAMERA_HEIGHT_PX,
+            view_matrix,
+            projection_matrix,
+            pybullet.ER_NO_SEGMENTATION_MASK,
+        )[3][:-2, 4:-4] # (58, 98)
+
+        # Convert depth buffer to liNEAR_CLIP depth
+        depth = FAR_CLIP * NEAR_CLIP / (FAR_CLIP - (FAR_CLIP - NEAR_CLIP) * depth)
+        depth = np.clip(depth, NEAR_CLIP, FAR_CLIP)
+        depth = (depth - NEAR_CLIP) / (FAR_CLIP - NEAR_CLIP)
+        depth -= 0.5  # center around zero
+
+        # Resize the image with bicubic interpolation to (58, 87)
+        depth = cv2.resize(
+            depth, (87, 58), interpolation=cv2.INTER_CUBIC
+        )
+
+        return np.clip(depth, -0.5, 0.5)
+
+    def load_obstacles(self):
+        box_half_length = 1.0
+        box_half_width = 2.5
+        box_half_height = 0.3
+        half_extents = [box_half_length, box_half_width, box_half_height]
+
+        col_id = pybullet.createCollisionShape(pybullet.GEOM_BOX, halfExtents=half_extents)
+        vis_id = pybullet.createVisualShape(
+            pybullet.GEOM_BOX, halfExtents=half_extents, rgbaColor=[1, 0, 0, 1]
+        )
+
+        x_offset = 2.0
+        z_offset = 0.0
+
+        num_boxes = 8
+        for i in range(num_boxes):
+            box_id = pybullet.createMultiBody(
+                baseMass=0,
+                baseCollisionShapeIndex=col_id,
+                baseVisualShapeIndex=vis_id,
+                basePosition=[x_offset, 0, z_offset],
+            )
+
+            info = pybullet.getDynamicsInfo(bodyUniqueId=box_id, linkIndex=-1)
+            pybullet.changeDynamics(bodyUniqueId=box_id, linkIndex=-1, lateralFriction=1.0)
+
+            self.collision_ids.append(i)
+
+            x_offset += 2 * box_half_length
+
+            if i + 1 < num_boxes // 2:
+                z_offset += box_half_height
+            elif i + 1 > num_boxes // 2:
+                z_offset -= box_half_height
+
+      
     def update(self):
         low_msg = LowState()
         timestamp = self.get_clock().now().to_msg()
@@ -171,35 +230,11 @@ class Go2Simulator(Node):
             self.robot_T[:3, :3] = R[:]
             self.robot_T[:3, 3] = position[:]
             self.robot_T[3, 3] = 1
-
-            up_vec = (R @ np.array([0., 0., 1.])).tolist()
-            camera_eye_w    = self.robot_T @ self.camera_eye_b
-            camera_target_w = self.robot_T @ self.camera_target_b
-
-            view_matrix = pybullet.computeViewMatrix(
-                    camera_eye_w.tolist()[:3], camera_target_w.tolist()[:3], up_vec
-            ) 
-
-            near  = 0.04
-            far = 1.
             
-            projection_matrix = pybullet.computeProjectionMatrixFOV(
-                    self.camera_horizontal_fov,
-                    self.camera_width_px / self.camera_height_px,
-                    near,
-                    far
-            )
-
-            depth = pybullet.getCameraImage(
-                self.camera_width_px,
-                self.camera_height_px,
-                view_matrix,
-                projection_matrix,
-                pybullet.ER_NO_SEGMENTATION_MASK
-                )[3][..., 19:-18]
-            depth = far * near / (far - (far - near) * depth) / depth
-            depth = 255 * (depth - near) / (far - near)
+            # Get the depth image
+            depth = self.get_camera_image(self.robot_T)
             depth = np.clip(depth, 0, 500).astype(np.uint8)
+
             ros_image_msg = self.bridge.cv2_to_imgmsg(depth, encoding='mono8')
             ros_image_msg.header.stamp = timestamp
             ros_image_msg.header.frame_id = 'base_link'
@@ -210,31 +245,34 @@ class Go2Simulator(Node):
         angular_vel = np.dot(R.T, angular_vel).astype(np.float32)
 
         low_msg.imu_state.accelerometer[:] = linear_vel
-        print(f"linear_vel={[*linear_vel.tolist()]}")
 
         # Bullet uses [x,y,z,w] quaternions while /lowstate expects [w,x,y,z]
         low_msg.imu_state.quaternion[0] = orientation[-1]
         low_msg.imu_state.quaternion[1:] = orientation[0:3]
         low_msg.imu_state.gyroscope = angular_vel
-        print(f"angular_vel={[*angular_vel.tolist()]}\n\n\n")
 
         # Update feet contact states
-        for i, (joint_idx, link_name) in enumerate(self.feet_idx):
+        for i, (foot_link_id, link_name) in enumerate(self.feet_idx):
             # Check ground plane contacts
-            contact_points = pybullet.getClosestPoints(self.robot, self.plane_id, 0.005, joint_idx)
-            contact_points += pybullet.getClosestPoints(self.robot, self.ramp_id, 0.005, joint_idx)
+            contact_points = [] 
+            for collision_id in self.collision_ids:
+                contact_points += pybullet.getContactPoints(
+                    bodyA=self.robot,
+                    bodyB=collision_id,
+                    linkIndexA=foot_link_id
+                )
+
             if len(contact_points) > 0:
                 low_msg.foot_force[i] = 100
 
         # Robot state
         self.lowstate_publisher.publish(low_msg)
 
-        # q_des = self.nominal_pose + 0.5 * self.act_buf[self.i // 10]
         q_des = np.array([self.last_cmd_msg.motor_cmd[i].q   for i in range(12)])
-        v_des   = np.array([self.last_cmd_msg.motor_cmd[i].dq  for i in range(12)]) * 0 # No velocity control
+        v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq  for i in range(12)]) * 0 # No velocity control
         tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)]) * 0 # No torque control
-        kp_des  = np.array([self.last_cmd_msg.motor_cmd[i].kp  for i in range(12)])
-        kd_des  = np.array([self.last_cmd_msg.motor_cmd[i].kd  for i in range(12)])
+        kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp  for i in range(12)])
+        kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd  for i in range(12)])
 
         for _ in range(self.low_level_sub_step):
             # Get sub step state
@@ -242,12 +280,10 @@ class Go2Simulator(Node):
             q = np.array([joint_state[0] for joint_state in joint_states])
             v = np.array([joint_state[1] for joint_state in joint_states])
 
-            # kp_des = 25.
-            # kd_des = 0.5
             tau_cmd = tau_des - np.multiply(q-q_des, kp_des) - np.multiply(v-v_des, kd_des)
-            # Clip torque command
-            tau_cmd = np.clip(tau_cmd, -25, 25) # Nm, torque limit
 
+            # Clip torque command
+            tau_cmd = np.clip(tau_cmd, -self.K_TORQUE_LIMIT, self.K_TORQUE_LIMIT) # Nm, torque limit
             # Set actuation
             pybullet.setJointMotorControlArray(
                 bodyIndex=self.robot,
@@ -274,13 +310,17 @@ class Go2Simulator(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+    go2_simulation = None
+
     try:
         go2_simulation = Go2Simulator()
         rclpy.spin(go2_simulation)
     except rclpy.exceptions.ROSInterruptException:
         pass
 
-    go2_simulation.destroy_node()
+    if go2_simulation:
+        go2_simulation.destroy_node()
+
     rclpy.shutdown()
 
 
