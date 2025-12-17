@@ -2,7 +2,6 @@ import cv2
 import pybullet
 import pybullet_data
 import rclpy
-import time
 
 from rclpy.node import Node
 from unitree_go.msg import LowState, LowCmd
@@ -41,8 +40,9 @@ class Go2Simulator(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # Timer to publish periodically
-        self.high_level_period = 1./200  # seconds
-        self.low_level_sub_step = 6
+        self.camera_period = 1./10  # seconds
+        self.high_level_period = 1./50  # seconds
+        self.low_level_sub_step = 12
 
         ########################## Cmd
         self.create_subscription(LowCmd, "/lowcmd", self.receive_cmd_cb, 10)
@@ -53,25 +53,25 @@ class Go2Simulator(Node):
         self.robot = 0
         self.init_pybullet()
 
+        self.last_msg_received = 0
+        self.counter = 0
         self.i = 0
 
         self.timer = self.create_timer(self.high_level_period, self.update)
+
         self.last_lin_vel = np.zeros(3, dtype=np.float32)
         self.last_lin_acc = np.zeros(3, dtype=np.float32)
 
         self.K_TORQUE_LIMIT = np.array([23.7, 23.7, 45.43, 23.7, 23.7, 45.43, 23.7, 23.7, 45.43, 23.7, 23.7, 45.43])
+        
+        self.low_msg = LowState()
+
 
     def init_pybullet(self):
-        cid = pybullet.connect(pybullet.SHARED_MEMORY)
-        self.get_logger().info(f"go2_simulator::pybullet:: cid={cid} ")
-        if (cid < 0):
-            pybullet.connect(pybullet.GUI, options="--opengl3")
-        else:
-            pybullet.connect(pybullet.GUI)
+        pybullet.connect(pybullet.GUI)
 
         # pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_GUI,0)
-        # pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
-
+        pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
 
         # Load robot
         self.get_logger().info(f"go2_simulator::loading urdf : {self.robot_path}")
@@ -100,7 +100,7 @@ class Go2Simulator(Node):
         pybullet.setAdditionalSearchPath(pybullet_data.getDataPath())
         self.plane_id = pybullet.loadURDF("plane.urdf")
         self.collision_ids = [self.plane_id]
-        self.load_obstacles()
+        # self.load_obstacles()
 
         pybullet.resetBasePositionAndOrientation(self.plane_id, [0, 0, 0], [0, 0, 0, 1])
 
@@ -137,6 +137,16 @@ class Go2Simulator(Node):
         self.camera_eye_b = np.array([0.35, 0.0, 0.1, 1.0])
         self.camera_target_b = np.array([100.0, 0.0, 0.1, 1.0])
 
+        self.q_des = np.zeros(12) 
+        self.v_des = np.zeros(12) 
+        self.tau_des = np.zeros(12)
+        self.kp_des = np.zeros(12)
+        self.kd_des = np.zeros(12)
+
+        self.q = np.zeros(12)
+        self.v = np.zeros(12)
+
+
     def get_camera_image(self, robot_T):
         up_vec = (robot_T[:3, :3] @ np.array([0.0, 0.0, 1.0])).tolist()
         camera_eye_w = robot_T @ self.camera_eye_b
@@ -154,7 +164,7 @@ class Go2Simulator(Node):
             view_matrix,
             projection_matrix,
             pybullet.ER_NO_SEGMENTATION_MASK,
-        )[3][:-2, 4:-4] # (58, 98)
+        )[3] #[:-2, 4:-4] # (58, 98)
 
         # Convert depth buffer to liNEAR_CLIP depth
         depth = FAR_CLIP * NEAR_CLIP / (FAR_CLIP - (FAR_CLIP - NEAR_CLIP) * depth)
@@ -192,9 +202,7 @@ class Go2Simulator(Node):
                 basePosition=[x_offset, 0, z_offset],
             )
 
-            info = pybullet.getDynamicsInfo(bodyUniqueId=box_id, linkIndex=-1)
             pybullet.changeDynamics(bodyUniqueId=box_id, linkIndex=-1, lateralFriction=1.0)
-
             self.collision_ids.append(i)
 
             x_offset += 2 * box_half_length
@@ -204,20 +212,39 @@ class Go2Simulator(Node):
             elif i + 1 > num_boxes // 2:
                 z_offset -= box_half_height
 
-      
     def update(self):
-        low_msg = LowState()
-        timestamp = self.get_clock().now().to_msg()
+        print(f"{self.counter=} Stepping simulation")
+        self.step_simulation()
 
+        print("Updating state")
+        self.update_state()
+
+        if self.counter % int(self.camera_period / self.high_level_period) == 0:
+            print("Updating camera")
+            self.update_camera()
+
+        self.counter += 1
+
+    def update_camera(self): 
+       # Get the depth image
+        return
+        depth = self.get_camera_image(self.robot_T)
+        depth = ((depth + 0.5) * 255).astype(np.uint8)
+
+        timestamp = self.get_clock().now().to_msg()
+        ros_image_msg = self.bridge.cv2_to_imgmsg(depth, encoding='mono8')
+        ros_image_msg.header.stamp = timestamp
+        self.image_publisher.publish(ros_image_msg)
+
+    def update_state(self):
         # Read sensors
         joint_states = pybullet.getJointStates(self.robot, self.j_idx)
-        received_q = [joint_state[0] for joint_state in joint_states]
 
         for joint_idx, joint_state in enumerate(joint_states):
-            low_msg.motor_state[joint_idx].mode = 1
-            low_msg.motor_state[joint_idx].q = joint_state[0]
-            low_msg.motor_state[joint_idx].dq = (joint_state[0] - self.joint_q[joint_idx]) / self.high_level_period
-            self.joint_q[joint_idx] = joint_state[0]
+            self.low_msg.motor_state[joint_idx].mode = 1
+            self.low_msg.motor_state[joint_idx].q = joint_state[0]
+            self.low_msg.motor_state[joint_idx].dq = (joint_state[0] - self.q[joint_idx]) / self.high_level_period
+            self.joint_q[joint_idx] = self.q[0]
 
         # Read IMU
         position, orientation = pybullet.getBasePositionAndOrientation(self.robot) # world frame
@@ -225,31 +252,20 @@ class Go2Simulator(Node):
 
         # Convert to body frame
         R = np.array(pybullet.getMatrixFromQuaternion(orientation), dtype=np.float32).reshape(3, 3)
-
-        if self.i % 50 == 0:
-            self.robot_T[:3, :3] = R[:]
-            self.robot_T[:3, 3] = position[:]
-            self.robot_T[3, 3] = 1
-            
-            # Get the depth image
-            depth = self.get_camera_image(self.robot_T)
-            depth = np.clip(depth, 0, 500).astype(np.uint8)
-
-            ros_image_msg = self.bridge.cv2_to_imgmsg(depth, encoding='mono8')
-            ros_image_msg.header.stamp = timestamp
-            ros_image_msg.header.frame_id = 'base_link'
-            self.image_publisher.publish(ros_image_msg)
-
-
+        self.robot_T[:3, :3] = R[:]
+        self.robot_T[:3, 3] = position[:]
+        self.robot_T[3, 3] = 1
+ 
         linear_vel = np.dot(R.T, linear_vel).astype(np.float32)
         angular_vel = np.dot(R.T, angular_vel).astype(np.float32)
 
-        low_msg.imu_state.accelerometer[:] = linear_vel
+        self.low_msg.imu_state.accelerometer[:] = linear_vel
 
         # Bullet uses [x,y,z,w] quaternions while /lowstate expects [w,x,y,z]
-        low_msg.imu_state.quaternion[0] = orientation[-1]
-        low_msg.imu_state.quaternion[1:] = orientation[0:3]
-        low_msg.imu_state.gyroscope = angular_vel
+        self.low_msg.tick = self.i
+        self.low_msg.imu_state.quaternion[0] = orientation[-1]
+        self.low_msg.imu_state.quaternion[1:] = orientation[0:3]
+        self.low_msg.imu_state.gyroscope = angular_vel
 
         # Update feet contact states
         for i, (foot_link_id, link_name) in enumerate(self.feet_idx):
@@ -263,24 +279,19 @@ class Go2Simulator(Node):
                 )
 
             if len(contact_points) > 0:
-                low_msg.foot_force[i] = 100
+                self.low_msg.foot_force[i] = 100
 
         # Robot state
-        self.lowstate_publisher.publish(low_msg)
+        self.lowstate_publisher.publish(self.low_msg)
 
-        q_des = np.array([self.last_cmd_msg.motor_cmd[i].q   for i in range(12)])
-        v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq  for i in range(12)]) * 0 # No velocity control
-        tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)]) * 0 # No torque control
-        kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp  for i in range(12)])
-        kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd  for i in range(12)])
-
+    def step_simulation(self):
         for _ in range(self.low_level_sub_step):
             # Get sub step state
             joint_states = pybullet.getJointStates(self.robot, self.j_idx)
-            q = np.array([joint_state[0] for joint_state in joint_states])
-            v = np.array([joint_state[1] for joint_state in joint_states])
+            self.q[:] = [joint_state[0] for joint_state in joint_states]
+            self.v[:] = [joint_state[1] for joint_state in joint_states]
 
-            tau_cmd = tau_des - np.multiply(q-q_des, kp_des) - np.multiply(v-v_des, kd_des)
+            tau_cmd = self.tau_des - np.multiply(self.q-self.q_des, self.kp_des) - np.multiply(self.v-self.v_des, self.kd_des)
 
             # Clip torque command
             tau_cmd = np.clip(tau_cmd, -self.K_TORQUE_LIMIT, self.K_TORQUE_LIMIT) # Nm, torque limit
@@ -298,7 +309,16 @@ class Go2Simulator(Node):
         self.i += 1
 
     def receive_cmd_cb(self, msg):
-        self.last_cmd_msg = msg
+        #self.last_cmd_msg = msg
+        self.q_des[:] = [msg.motor_cmd[i].q   for i in range(12)]
+        # self.v_des[:] = [msg.motor_cmd[i].dq  for i in range(12)] * 0 # No velocity control
+        # self.tau_des[:] = [msg.motor_cmd[i].tau for i in range(12)] * 0 # No torque control
+        self.kp_des[:] = [msg.motor_cmd[i].kp  for i in range(12)]
+        self.kd_des[:] = [msg.motor_cmd[i].kd  for i in range(12)]
+
+        self.last_msg_received = self.counter
+
+        # self.update()
 
     def get_joint_id(self, joint_name):
         num_joints = pybullet.getNumJoints(self.robot)
