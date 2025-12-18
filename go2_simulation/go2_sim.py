@@ -49,7 +49,7 @@ class Go2Simulator(Node):
 
         robot_subpath = "go2_description/urdf/go2.urdf"
         self.robot_path = os.path.join(getModelPath(robot_subpath), robot_subpath)
-        self.robot_path = "/home/ugokbaka/Workspace/reinforcement-learning/SoloParkour/go2/go2.urdf"
+        self.robot_path = "/home/hamlet/Workspace/reinforcement-learning/SoloParkour/go2/go2.urdf"
         self.robot = 0
         self.init_pybullet()
 
@@ -100,7 +100,7 @@ class Go2Simulator(Node):
         pybullet.setAdditionalSearchPath(pybullet_data.getDataPath())
         self.plane_id = pybullet.loadURDF("plane.urdf")
         self.collision_ids = [self.plane_id]
-        # self.load_obstacles()
+        self.load_obstacles()
 
         pybullet.resetBasePositionAndOrientation(self.plane_id, [0, 0, 0], [0, 0, 0, 1])
 
@@ -163,7 +163,8 @@ class Go2Simulator(Node):
             CAMERA_HEIGHT_PX,
             view_matrix,
             projection_matrix,
-            pybullet.ER_NO_SEGMENTATION_MASK,
+            renderer=pybullet.ER_BULLET_HARDWARE_OPENGL,
+            flags=pybullet.ER_NO_SEGMENTATION_MASK,
         )[3] #[:-2, 4:-4] # (58, 98)
 
         # Convert depth buffer to liNEAR_CLIP depth
@@ -227,7 +228,6 @@ class Go2Simulator(Node):
 
     def update_camera(self): 
        # Get the depth image
-        return
         depth = self.get_camera_image(self.robot_T)
         depth = ((depth + 0.5) * 255).astype(np.uint8)
 
@@ -242,9 +242,8 @@ class Go2Simulator(Node):
 
         for joint_idx, joint_state in enumerate(joint_states):
             self.low_msg.motor_state[joint_idx].mode = 1
+            self.low_msg.motor_state[joint_idx].dq = (joint_state[0] - self.low_msg.motor_state[joint_idx].q) / self.high_level_period
             self.low_msg.motor_state[joint_idx].q = joint_state[0]
-            self.low_msg.motor_state[joint_idx].dq = (joint_state[0] - self.q[joint_idx]) / self.high_level_period
-            self.joint_q[joint_idx] = self.q[0]
 
         # Read IMU
         position, orientation = pybullet.getBasePositionAndOrientation(self.robot) # world frame
