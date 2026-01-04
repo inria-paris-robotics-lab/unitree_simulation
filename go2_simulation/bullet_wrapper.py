@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 from go2_description import GO2_DESCRIPTION_URDF_PATH
 import pybullet
@@ -7,6 +8,16 @@ from go2_simulation.abstract_wrapper import AbstractSimulatorWrapper
 from ament_index_python.packages import get_package_share_directory
 import os
 
+# TODO: Properly parametrize camera extrinsics through ROS params
+CAMERA_HEIGHT_PX = 60
+CAMERA_WIDTH_PX = 106
+CAMERA_FOV = 87.0
+NEAR_CLIP, FAR_CLIP = 0.01, 2.0
+
+# in extreme-parkour, the camera looks [0, 1] degrees downwards.
+# so 0.5 degrees = 0.0087 radians, 1m * sin(0.0087) ~= 0.0086m ~= 0.01m
+CAMERA_TARGET_B = np.array([1.3, 0.0, 0.07, 1.0])
+CAMERA_EYE_B = np.array([0.3, 0.0, 0.08, 1.0])
 
 class BulletWrapper(AbstractSimulatorWrapper):
     def __init__(self, node, timestep):
@@ -88,9 +99,14 @@ class BulletWrapper(AbstractSimulatorWrapper):
             forces=[0.0 for i in range(12)],
         )
 
+
+        self.w_T_b = np.eye(4)
+
         # Finite differences to compute acceleration
         self.dt = timestep
         self.v_last = None
+
+        assert pybullet.isNumpyEnabled(), "Numpy not enabled in PyBullet!"
 
     def get_joint_id(self, joint_name):
         num_joints = pybullet.getNumJoints(self.robot)
@@ -121,6 +137,9 @@ class BulletWrapper(AbstractSimulatorWrapper):
         rot_mat = R.from_quat(angular_pose).as_matrix()
         linear_pose += rot_mat @ self.localInertiaPos
 
+        self.w_T_b[:3, :3] = rot_mat
+        self.w_T_b[:3, 3] = linear_pose
+
         # Transform from Local world aligned to local
         linear_vel = rot_mat.T @ linear_vel
         angular_vel = rot_mat.T @ angular_vel
@@ -145,3 +164,42 @@ class BulletWrapper(AbstractSimulatorWrapper):
                 f_current[i] = 39.4  # roughly 1/4 of the robot mass (0th order approx)
 
         return q_current, v_current, a_current, f_current
+
+    def get_camera_image(self):
+        ''' Get depth image from the robot's camera in the world frame '''
+        # return None
+        rot_mat = self.w_T_b[:3, :3]
+
+        up_vec = (rot_mat @ np.array([0.0, 0.0, 1.0])).tolist()
+        CAMERA_EYE_W = self.w_T_b @ CAMERA_EYE_B
+        CAMERA_TARGET_W = self.w_T_b @ CAMERA_TARGET_B
+
+        view_matrix = pybullet.computeViewMatrix(
+            CAMERA_EYE_W.tolist()[:3], CAMERA_TARGET_W.tolist()[:3], up_vec
+        )
+
+        projection_matrix = pybullet.computeProjectionMatrixFOV(
+            CAMERA_FOV, CAMERA_WIDTH_PX / CAMERA_HEIGHT_PX, NEAR_CLIP, FAR_CLIP)
+
+        self.depth = pybullet.getCameraImage(
+            CAMERA_WIDTH_PX,
+            CAMERA_HEIGHT_PX,
+            view_matrix,
+            projection_matrix,
+            renderer=pybullet.ER_BULLET_HARDWARE_OPENGL,
+            flags=pybullet.ER_NO_SEGMENTATION_MASK,
+        )[3][:-2, 4:-4] # (58, 98)
+
+        depth = self.depth
+        # Convert depth buffer to liNEAR_CLIP depth
+        depth = FAR_CLIP * NEAR_CLIP / (FAR_CLIP - (FAR_CLIP - NEAR_CLIP) * depth)
+        depth = np.clip(depth, NEAR_CLIP, FAR_CLIP)
+        depth = (depth - NEAR_CLIP) / (FAR_CLIP - NEAR_CLIP)
+
+        # Resize the image with bicubic interpolation to (58, 87)
+        depth = cv2.resize(
+            depth, (87, 58), interpolation=cv2.INTER_CUBIC
+        )
+
+        return (65535 * np.clip(depth, 0, 1)).astype(np.uint16)
+

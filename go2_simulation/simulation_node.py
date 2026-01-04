@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from sensor_msgs.msg import Image
 from unitree_go.msg import LowState, LowCmd
 from nav_msgs.msg import Odometry
 import numpy as np
@@ -8,7 +9,7 @@ from scipy.spatial.transform import Rotation as R
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 from go2_simulation.abstract_wrapper import AbstractSimulatorWrapper
-
+from cv_bridge import CvBridge
 
 class Go2Simulation(Node):
     def __init__(self):
@@ -19,12 +20,15 @@ class Go2Simulation(Node):
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
         self.odometry_publisher = self.create_publisher(Odometry, "/odometry/filtered", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.depth_publisher = self.create_publisher(Image, "/camera/depth", 10)
 
         # Timer to publish periodically
         self.high_level_period = 1.0 / 500  # seconds
-        self.low_level_sub_step = 12
+        self.low_level_sub_step = 4
         self.timer = self.create_timer(self.high_level_period, self.update)
 
+        self.camera_decimation = 50
+        #self.camera_timer = self.create_timer(self.camera_period, self.camera_update)
         ########################## Cmd listener
         self.create_subscription(LowCmd, "/lowcmd", self.receive_cmd_cb, 10)
         self.last_cmd_msg = LowCmd()
@@ -42,14 +46,20 @@ class Go2Simulation(Node):
             from go2_simulation.bullet_wrapper import BulletWrapper
 
             self.simulator = BulletWrapper(self, timestep)
+            self.bridge = CvBridge()
         else:
             self.get_logger().error("Simulation tool not recognized")
+
+        self.simulator_name = simulator_name
+        self.get_logger().info(f"go2_simulator::simulator {simulator_name} loaded")
 
         ########################## Initial state
         self.q_current = np.zeros(7 + 12)
         self.v_current = np.zeros(6 + 12)
         self.a_current = np.zeros(6 + 12)
         self.f_current = np.zeros(4)
+
+        self.i = 0
 
     def update(self):
         ## Control robot
@@ -142,12 +152,27 @@ class Go2Simulation(Node):
         transform_msg.transform.rotation.w = self.q_current[6]
         self.tf_broadcaster.sendTransform(transform_msg)
 
+        # Camera update
+        if self.i % self.camera_decimation == 0:
+            self.camera_update()
+
         # Check that the simulator is on time
-        if self.timer.time_until_next_call() < 0:
+        if self.timer.time_until_next_call() < 0 and self.i % self.camera_decimation != 0:
             ratio = 1.0 - self.timer.time_until_next_call() * 1e-9 / self.high_level_period
             self.get_logger().warn(
                 "Simulator running slower than real time! Real time ratio : %.2f " % ratio, throttle_duration_sec=0.1
             )
+        self.i += 1
+
+    def camera_update(self):
+        if self.simulator_name == "pybullet":
+            im = self.simulator.get_camera_image()
+        else:
+            self.get_logger().warn(f"Camera not implemented for this simulator: {self.simulator_name}")
+
+        if im is not None:
+            img_msg = self.bridge.cv2_to_imgmsg(im, encoding="16UC1")
+            self.depth_publisher.publish(img_msg)
 
     def receive_cmd_cb(self, msg):
         self.last_cmd_msg = msg
