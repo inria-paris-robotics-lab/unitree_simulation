@@ -15,6 +15,7 @@ class Go2Simulation(Node):
     def __init__(self):
         super().__init__("go2_simulation")
         simulator_name = self.declare_parameter("simulator", rclpy.Parameter.Type.STRING).value
+        simulator_name = "pybullet" if simulator_name is None else simulator_name
 
         ########################### State publisher
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
@@ -27,7 +28,9 @@ class Go2Simulation(Node):
         self.low_level_sub_step = 4
         self.timer = self.create_timer(self.high_level_period, self.update)
 
-        self.camera_decimation = 50
+        ########################## Camera
+        self.camera_period = 1.0 / 10 # seconds
+        self.camera_decimation = int(self.camera_period / self.high_level_period)
         #self.camera_timer = self.create_timer(self.camera_period, self.camera_update)
         ########################## Cmd listener
         self.create_subscription(LowCmd, "/lowcmd", self.receive_cmd_cb, 10)
