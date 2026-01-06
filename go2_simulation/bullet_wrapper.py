@@ -167,7 +167,6 @@ class BulletWrapper(AbstractSimulatorWrapper):
 
     def get_camera_image(self):
         ''' Get depth image from the robot's camera in the world frame '''
-        # return None
         rot_mat = self.w_T_b[:3, :3]
 
         up_vec = (rot_mat @ np.array([0.0, 0.0, 1.0])).tolist()
@@ -181,7 +180,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
         projection_matrix = pybullet.computeProjectionMatrixFOV(
             CAMERA_FOV, CAMERA_WIDTH_PX / CAMERA_HEIGHT_PX, NEAR_CLIP, FAR_CLIP)
 
-        self.depth = pybullet.getCameraImage(
+        depth = pybullet.getCameraImage(
             CAMERA_WIDTH_PX,
             CAMERA_HEIGHT_PX,
             view_matrix,
@@ -190,7 +189,6 @@ class BulletWrapper(AbstractSimulatorWrapper):
             flags=pybullet.ER_NO_SEGMENTATION_MASK,
         )[3][:-2, 4:-4] # (58, 98)
 
-        depth = self.depth
         # Convert depth buffer to liNEAR_CLIP depth
         depth = FAR_CLIP * NEAR_CLIP / (FAR_CLIP - (FAR_CLIP - NEAR_CLIP) * depth)
         depth = np.clip(depth, NEAR_CLIP, FAR_CLIP)
@@ -201,5 +199,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
             depth, (87, 58), interpolation=cv2.INTER_CUBIC
         )
 
-        return (65535 * np.clip(depth, 0, 1)).astype(np.uint16)
+        depth = np.clip(depth, 0, 1) - 0.5
+
+        return (255 * depth).astype(np.uint8)
 
