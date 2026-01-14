@@ -10,6 +10,9 @@ from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 from go2_simulation.abstract_wrapper import AbstractSimulatorWrapper
 from cv_bridge import CvBridge
+from rosgraph_msgs.msg import Clock
+from rclpy.time import Time
+from rclpy.duration import Duration
 
 class Go2Simulation(Node):
     def __init__(self):
@@ -22,6 +25,7 @@ class Go2Simulation(Node):
         self.odometry_publisher = self.create_publisher(Odometry, "/odometry/filtered", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.depth_publisher = self.create_publisher(Image, "/camera/depth", 10)
+        self.clock_publisher = self.create_publisher(Clock, "/clock", 10)
 
         # Timer to publish periodically
         self.high_level_period = 1.0 / 500  # seconds
@@ -31,7 +35,7 @@ class Go2Simulation(Node):
         ########################## Camera
         self.camera_period = 1.0 / 10 # seconds
         self.camera_decimation = int(self.camera_period / self.high_level_period)
-        #self.camera_timer = self.create_timer(self.camera_period, self.camera_update)
+
         ########################## Cmd listener
         self.create_subscription(LowCmd, "/lowcmd", self.receive_cmd_cb, 10)
         self.last_cmd_msg = LowCmd()
@@ -63,6 +67,8 @@ class Go2Simulation(Node):
         self.f_current = np.zeros(4)
 
         self.i = 0
+        self.sim_time = Time(seconds=0, nanoseconds=0)
+        self.time_delta = Duration(seconds=0, nanoseconds=int(self.high_level_period * 1e9))
 
     def update(self):
         ## Control robot
@@ -87,7 +93,13 @@ class Go2Simulation(Node):
         odometry_msg = Odometry()
         transform_msg = TransformStamped()
 
-        timestamp = self.get_clock().now().to_msg()
+        # Update simulation time
+        self.sim_time += self.time_delta
+        clock_msg = Clock()
+        clock_msg.clock = self.sim_time.to_msg()
+        self.clock_publisher.publish(clock_msg)
+
+        timestamp = self.sim_time.to_msg() 
 
         # Format motor readings
         for joint_idx in range(12):
