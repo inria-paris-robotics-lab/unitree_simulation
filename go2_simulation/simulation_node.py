@@ -174,7 +174,7 @@ class Go2Simulation(Node):
             self.get_logger().warn(f"Camera not implemented for this simulator: {self.simulator_name}")
 
         if im is not None:
-            img_msg = self.bridge.cv2_to_imgmsg(im, encoding="8UC1")
+            img_msg = self.bridge.cv2_to_imgmsg(im, encoding="mono8")
             self.depth_publisher.publish(img_msg)
 
     def receive_cmd_cb(self, msg):
