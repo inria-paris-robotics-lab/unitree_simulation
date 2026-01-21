@@ -33,8 +33,8 @@ class BulletWrapper(AbstractSimulatorWrapper):
         self.x_offset = 3.0
         self.z_offset = 0.0
 
+        self.load_walls()
         self.load_obstacles()
-
 
     def init_pybullet(self, timestep):
         cid = pybullet.connect(pybullet.SHARED_MEMORY)
@@ -113,7 +113,6 @@ class BulletWrapper(AbstractSimulatorWrapper):
             forces=[0.0 for i in range(12)],
         )
 
-
         self.w_T_b = np.eye(4)
 
         # Finite differences to compute acceleration
@@ -121,6 +120,25 @@ class BulletWrapper(AbstractSimulatorWrapper):
         self.v_last = None
 
         assert pybullet.isNumpyEnabled(), "Numpy not enabled in PyBullet!"
+
+    def load_walls(self):
+        half_extents = [10.0, 0.1, 2.0]
+        col_id = pybullet.createCollisionShape(pybullet.GEOM_BOX, halfExtents=half_extents)
+        vis_id = pybullet.createVisualShape(
+            pybullet.GEOM_BOX, halfExtents=half_extents, rgbaColor=[1, 0, 0, 1]
+        )
+        box_id = pybullet.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=[10.0, self.box_half_width + .1, 1.],
+        )
+        box_id = pybullet.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=[10.0, -self.box_half_width - .1, 1.],
+        )
 
     def load_obstacles(self):
         half_extents = [self.box_half_length, self.box_half_width, self.box_half_height]
