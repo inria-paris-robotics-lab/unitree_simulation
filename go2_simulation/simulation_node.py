@@ -4,6 +4,7 @@ from sensor_msgs.msg import Image
 from unitree_go.msg import LowState, LowCmd
 from nav_msgs.msg import Odometry
 import numpy as np
+import pybullet as pb
 from scipy.spatial.transform import Rotation as R
 
 from tf2_ros import TransformBroadcaster
@@ -13,6 +14,34 @@ from cv_bridge import CvBridge
 from rosgraph_msgs.msg import Clock
 from rclpy.time import Time
 from rclpy.duration import Duration
+
+import onnxruntime as rt
+from collections import deque
+
+def euler_from_quaternion(quat_angle):
+    """
+    NOTE: This was copied from extreme-parkour repo
+
+    Convert a quaternion into euler angles (roll, pitch, yaw)
+    roll is rotation around x in radians (counterclockwise)
+    pitch is rotation around y in radians (counterclockwise)
+    yaw is rotation around z in radians (counterclockwise)
+    """
+    x, y, z, w = quat_angle
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll_x = np.arctan2(t0, t1)
+
+    t2 = +2.0 * (w * y - z * x)
+    t2 = np.clip(t2, -1, 1)
+    pitch_y = np.arcsin(t2)
+
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw_z = np.arctan2(t3, t4)
+
+    return roll_x, pitch_y, yaw_z # in radians
+
 
 class Go2Simulation(Node):
     def __init__(self):
@@ -28,13 +57,14 @@ class Go2Simulation(Node):
         self.clock_publisher = self.create_publisher(Clock, "/clock", 10)
 
         # Timer to publish periodically
-        self.high_level_period = 1.0 / 500  # seconds
-        self.low_level_sub_step = 4
+        self.high_level_period = 1.0 / 50  # seconds
+        self.low_level_sub_step = 24
         self.timer = self.create_timer(self.high_level_period, self.update)
 
         ########################## Camera
         self.camera_period = 1.0 / 10 # seconds
         self.camera_decimation = int(self.camera_period / self.high_level_period)
+        breakpoint()
 
         ########################## Cmd listener
         self.create_subscription(LowCmd, "/lowcmd", self.receive_cmd_cb, 10)
@@ -70,13 +100,144 @@ class Go2Simulation(Node):
         self.sim_time = Time(seconds=0, nanoseconds=0)
         self.time_delta = Duration(seconds=0, nanoseconds=int(self.high_level_period * 1e9))
 
+        self.init_onnx()
+
+    def init_onnx(self):
+        onnx_path = "./models/wall.onnx"
+        onnx_path = "/home/hamlet/Workspace/reinforcement-learning/inference/" + onnx_path
+        self.onnx_session = rt.InferenceSession(onnx_path)
+
+        self.w_T_b = np.eye(4)
+        self.joint_pos = np.zeros(12)
+        self.joint_vel = np.zeros(12)
+        self.joint_pos_policy = np.zeros(12)
+        self.joint_vel_policy = np.zeros(12)
+
+        self.q0 = np.array([-0.1,  0.8, -1.5, 0.1,  0.8, -1.5,  -0.1,  1., -1.5, 0.1,  1., -1.5])
+        self.q_des = self.q0.copy()
+
+        # First two elements are 0, third is the forward speed
+        forward_speed = 0.37
+        self.vel_cmd = np.array([0., 0., forward_speed])
+        self.env_class = np.array([1, 0])
+
+        self.action_buffer = deque(maxlen=2)
+        self.depth_buffer = deque(maxlen=2)
+
+        self.depth_latent = np.zeros((1, 32), dtype=np.float32)
+        self.vobs = np.zeros((1, 58, 87), dtype=np.float32)
+        self.yaws = np.zeros((1, 2), dtype=np.float32)
+        self.obs = np.zeros((1, 53), dtype=np.float32)
+        self.obs_history = np.zeros((1, 10, 53), dtype=np.float32)
+        self.rnn_hidden_in = np.zeros((1, 1, 512), dtype=np.float32)
+        self.update_depth = np.zeros((1,1), dtype=np.float32)
+        self.update_yaw = np.ones((1,1), dtype=np.float32)
+        self.step_counter = np.zeros((1,), dtype=np.float32)
+
+        self.actions = np.zeros((1, 12), dtype=np.float32)
+
+
+    def forward(self, camera: bool = False):
+        if self.i == 0:
+            return np.zeros(12)
+
+        robot_id = self.simulator.robot
+
+        if camera:
+            im = self.simulator.get_camera_image().astype(np.float32)
+            self.vobs[:] = (im / 255.) - 0.5
+            self.update_yaw[:] = 1.0
+            self.update_depth[:] = 1.0
+        else:
+            self.update_yaw[:] = 0.0
+            self.update_depth[:] = 0.0
+
+        w_P_b, w_Q_b = pb.getBasePositionAndOrientation(robot_id)
+
+        w_P_b = np.array(w_P_b, dtype=np.float32)
+        w_R_b = np.array(pb.getMatrixFromQuaternion(w_Q_b), dtype=np.float32).reshape(
+            3, 3
+        )
+
+        self.w_T_b[:3, :3] = w_R_b
+        self.w_T_b[:3, 3] = w_P_b
+
+        _, ang_vel_w = pb.getBaseVelocity(robot_id)
+        ang_vel_b = w_R_b.T @ np.array(ang_vel_w)
+        contact_states = self.low_msg.foot_force > 20
+
+        roll, pitch, yaw = euler_from_quaternion(w_Q_b)
+        imu_obs = np.array([roll, pitch])
+
+        q = np.array([ms.q for ms in self.low_msg.motor_state])[:12] - self.q0
+
+        self.joint_vel[:] = (q - self.joint_pos) * 50. 
+        self.joint_pos[:] = q
+
+        obs_data = [
+            1 * ang_vel_b * 0.25, # 3
+            1 * imu_obs, # 2
+            [0.0],
+            1 * self.yaws.squeeze(),
+            1 * self.vel_cmd, # 3
+            1 * self.env_class, # 2
+            1 * self.joint_pos, 
+            1 * (self.joint_vel * 0.05),
+            1 * (self.actions.squeeze()),
+            1 * (contact_states - 0.5)
+        ]
+
+        clip = lambda a: np.clip(a, -100.0, 100.0)
+        self.obs[:] = (
+            np.concatenate(obs_data).reshape(1, 53).astype(np.float32)
+        )
+        self.obs[:] = clip(self.obs)
+        self.step_counter[:] = self.i - 1
+
+        # Policy module
+        inputs = {
+            "depth": clip(self.vobs),
+            "depth_latent_in": self.depth_latent,
+            "yaw_in": clip(self.yaws),
+            "obs_proprio": clip(self.obs),
+            "obs_history_in": clip(self.obs_history),
+            "update_depth": self.update_depth,
+            "update_yaw": self.update_yaw,
+            "hidden_states_in": self.rnn_hidden_in,
+            "step_counter": self.step_counter
+        }
+
+        nn_actions, depth_latent, yaws, obs_history, _ = self.onnx_session.run(
+            ['actions', 'depth_latent_out', 'yaw_out', 'obs_history_out', 'hidden_states_out'], inputs
+        )
+        self.actions[:] = nn_actions.astype(np.float32)
+        self.depth_latent[:] = depth_latent
+        self.yaws[:] = yaws
+        self.obs_history[:] = obs_history
+        # self.rnn_hidden_in[:] = hidden_states_out
+
+        return self.q0 + (np.clip(self.actions.squeeze(), -4.8, 4.8) * .25)
+
+
     def update(self):
         ## Control robot
-        q_des = np.array([self.last_cmd_msg.motor_cmd[i].q for i in range(12)])
-        v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq for i in range(12)])
-        tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)])
-        kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp for i in range(12)])
-        kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(12)])
+        if False:
+            q_des = np.array([self.last_cmd_msg.motor_cmd[i].q for i in range(12)])
+            v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq for i in range(12)])
+            tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)])
+            kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp for i in range(12)])
+            kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(12)])
+        else:
+            # Camera update
+            if self.i % self.camera_decimation == 0:
+                q_des = self.forward(camera=True)
+            else:
+                q_des = self.forward(camera=False)
+
+            v_des = np.zeros(12)
+            tau_des = np.zeros(12)
+            kp_des = 40 * np.ones(12)
+            kd_des = 1 * np.ones(12)
 
         for _ in range(self.low_level_sub_step):
             # Iterate to simulate motor internal controller
@@ -112,6 +273,7 @@ class Go2Simulation(Node):
         low_msg.foot_force = (14.2 * np.ones(4) + 0.562 * self.f_current).astype(np.int32).tolist()
 
         # Format IMU
+        # bullet quat
         quat_xyzw = self.q_current[3:7].tolist()
         l_angular_vel = self.v_current[3:6]  # In local frame
         l_linear_acc = self.a_current[0:3]  # In local frame
@@ -133,6 +295,7 @@ class Go2Simulation(Node):
 
         # Publish message
         self.lowstate_publisher.publish(low_msg)
+        self.low_msg = low_msg
 
         ## Send robot pose
         # Odometry / state estimation
@@ -166,10 +329,6 @@ class Go2Simulation(Node):
         transform_msg.transform.rotation.z = self.q_current[5]
         transform_msg.transform.rotation.w = self.q_current[6]
         self.tf_broadcaster.sendTransform(transform_msg)
-
-        # Camera update
-        if self.i % self.camera_decimation == 0:
-            self.camera_update()
 
         # Check that the simulator is on time
         if self.timer.time_until_next_call() < 0 and self.i % self.camera_decimation != 0:
