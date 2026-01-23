@@ -37,16 +37,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
         self.load_obstacles()
 
     def init_pybullet(self, timestep):
-        cid = pybullet.connect(pybullet.SHARED_MEMORY)
-        if cid < 0:
-            pybullet.connect(pybullet.GUI, options="--opengl3")
-        else:
-            pybullet.connect(pybullet.GUI)
-
-        # Load robot
-        self.robot = pybullet.loadURDF(GO2_DESCRIPTION_URDF_PATH, [0, 0, 0.4])
-        print('URDF loaded from:', GO2_DESCRIPTION_URDF_PATH)
-        self.localInertiaPos = pybullet.getDynamicsInfo(self.robot, -1)[3]
+        pybullet.connect(pybullet.GUI, options="--opengl3")
 
         # Load ground plane and other obstacles
         self.env_ids = []  # Keep track of all obstacles
@@ -56,10 +47,11 @@ class BulletWrapper(AbstractSimulatorWrapper):
         self.env_ids.append(self.plane_id)
         pybullet.resetBasePositionAndOrientation(self.plane_id, [0, 0, 0], [0, 0, 0, 1])
 
-        self.ramp_id = pybullet.loadURDF(
-            os.path.join(get_package_share_directory("go2_simulation"), "data/assets/obstacles.urdf")
-        )
-        self.env_ids.append(self.ramp_id)
+        # Load robot
+        GO2_DESCRIPTION_URDF_PATH = '/home/hamlet/Workspace/reinforcement-learning/inference/assets/go2/go2.urdf'
+        self.robot = pybullet.loadURDF(GO2_DESCRIPTION_URDF_PATH, [0, 0, 0.4])
+        print('URDF loaded from:', GO2_DESCRIPTION_URDF_PATH)
+        self.localInertiaPos = pybullet.getDynamicsInfo(self.robot, -1)[3]
 
         # Set time step
         pybullet.setTimeStep(timestep)
@@ -97,7 +89,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
                 self.feet_idx[foot_id] = (i, link_name)
 
         # Set robot initial config on the ground
-        initial_q = [0.0, 1.00, -2.1, 0.0, 1.00, -2.1, 0, 1.00, -2.1, 0, 1.00, -2.1]
+        initial_q = [-0.1,  0.8, -1.5, 0.1,  0.8, -1.5,  -0.1,  1., -1.5, 0.1,  1., -1.5]
         for i, id in enumerate(self.j_idx):
             pybullet.resetJointState(self.robot, id, initial_q[i])
 
@@ -148,7 +140,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
             pybullet.GEOM_BOX, halfExtents=half_extents, rgbaColor=[1, 0, 0, 1]
         )
 
-        num_boxes = 8
+        num_boxes = 2
         for i in range(num_boxes):
             box_id = pybullet.createMultiBody(
                 baseMass=0,
@@ -160,7 +152,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
             info = pybullet.getDynamicsInfo(bodyUniqueId=box_id, linkIndex=-1)
             pybullet.changeDynamics(bodyUniqueId=box_id, linkIndex=-1, lateralFriction=1.0)
 
-            self.env_ids.append(i)
+            self.env_ids.append(box_id)
 
             self.x_offset += 2 * self.box_half_length
 
@@ -177,6 +169,30 @@ class BulletWrapper(AbstractSimulatorWrapper):
             if joint_info[1].decode("utf-8") == joint_name:
                 return i
         return None  # Joint name not found
+
+
+    def get_feet_contact_states(self):
+        f_current = np.zeros(4)
+        for i, foot_name in enumerate(self.foot_link_names):
+            for collision_id in self.env_ids:
+                foot_link_id = self.feet_idx[i][0]
+
+                # Get contact points between foot and ground
+                contact_points = pybullet.getContactPoints(
+                    bodyA=self.robot,
+                    bodyB=collision_id,
+                    linkIndexA=foot_link_id
+                )
+
+                # Check if there are any contacts
+                is_in_contact = len(contact_points) > 0
+
+                if is_in_contact:
+                    f_current[i] = 39.4  # roughly 1/4 of the robot mass (0th order approx)
+                    break  # No need to check other obstacles for this foot
+
+        return f_current
+
 
     def step(self, tau_cmd):
         # Set actuation
@@ -212,27 +228,9 @@ class BulletWrapper(AbstractSimulatorWrapper):
         q_current = np.concatenate((np.array(linear_pose), np.array(angular_pose), joint_position))
         v_current = np.concatenate((np.array(linear_vel), np.array(angular_vel), joint_velocity))
         a_current = ((v_current - self.v_last) / self.dt) if self.v_last is not None else np.zeros(6 + 12)
-        f_current = np.zeros(4)
-
         self.v_last = v_current
 
-        for i, foot_name in enumerate(self.foot_link_names):
-            for collision_id in self.env_ids:
-                foot_link_id = self.feet_idx[i][0]
-
-                # Get contact points between foot and ground
-                contact_points = pybullet.getContactPoints(
-                    bodyA=self.robot,
-                    bodyB=collision_id,
-                    linkIndexA=foot_link_id
-                )
-
-                # Check if there are any contacts
-                is_in_contact = len(contact_points) > 0
-
-                if is_in_contact:
-                    f_current[i] = 39.4  # roughly 1/4 of the robot mass (0th order approx)
-                    break  # No need to check other obstacles for this foot
+        f_current = self.get_feet_contact_states()
 
         return q_current, v_current, a_current, f_current
 
