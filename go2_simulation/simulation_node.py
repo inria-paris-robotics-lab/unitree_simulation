@@ -81,7 +81,13 @@ class Actor:
         # LowCmd
         self.lowcmd = LowCmd()
 
-    def forward(self, lowstate: LowState, im: typing.Optional[Image] = None):
+        for i in range(12):
+            self.lowcmd.motor_cmd[i].dq = 0.0
+            self.lowcmd.motor_cmd[i].tau = 0.0
+            self.lowcmd.motor_cmd[i].kp = 40.0
+            self.lowcmd.motor_cmd[i].kd = 1.0
+
+    def forward(self, lowstate: LowState, im: typing.Optional[Image] = None) -> LowCmd():
         if im:
             im = np.array(im.data).reshape(im.height,im.width)
             self.vobs[:] = (im / 255.) - 0.5
@@ -146,7 +152,12 @@ class Actor:
         self.obs_history[:] = obs_history
         # self.rnn_hidden_in[:] = hidden_states_out
 
-        return self.q0 + (np.clip(self.actions.squeeze(), -4.8, 4.8) * .25)
+        qdes = self.q0 + (np.clip(self.actions.squeeze(), -4.8, 4.8) * .25)
+
+        for i in range(12):
+            self.lowcmd.motor_cmd[i].q = qdes[i]
+
+        return self.lowcmd
 
 
 class Go2Simulation(Node):
@@ -209,27 +220,20 @@ class Go2Simulation(Node):
 
 
     def update(self):
-        ## Control robot
-        if False:
-            q_des = np.array([self.last_cmd_msg.motor_cmd[i].q for i in range(12)])
-            v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq for i in range(12)])
-            tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)])
-            kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp for i in range(12)])
-            kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(12)])
+        # Camera update
+        if self.i == 0:
+            self.last_cmd_msg = LowCmd() 
+        elif self.i % self.camera_decimation == 0:
+            im = self.camera_update() 
+            self.last_cmd_msg = self.actor.forward(self.low_msg, im=im)
         else:
-            # Camera update
-            if self.i == 0:
-                q_des = np.zeros(12)
-            elif self.i % self.camera_decimation == 0:
-                im = self.camera_update() 
-                q_des = self.actor.forward(self.low_msg, im=im)
-            else:
-                q_des = self.actor.forward(self.low_msg, im=None)
+            self.last_cmd_msg = self.actor.forward(self.low_msg, im=None)
 
-            v_des = np.zeros(12)
-            tau_des = np.zeros(12)
-            kp_des = 40 * np.ones(12)
-            kd_des = 1 * np.ones(12)
+        q_des = np.array([self.last_cmd_msg.motor_cmd[i].q for i in range(12)])
+        v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq for i in range(12)])
+        tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)])
+        kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp for i in range(12)])
+        kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(12)])
 
         for _ in range(self.low_level_sub_step):
             # Iterate to simulate motor internal controller
