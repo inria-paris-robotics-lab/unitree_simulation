@@ -1,4 +1,5 @@
 import rclpy
+import typing
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from unitree_go.msg import LowState, LowCmd
@@ -42,6 +43,111 @@ def euler_from_quaternion(quat_angle):
 
     return roll_x, pitch_y, yaw_z # in radians
 
+class Actor:
+    def __init__(self):
+        onnx_path = "./models/wall.onnx"
+        onnx_path = "/home/hamlet/Workspace/reinforcement-learning/inference/" + onnx_path
+        self.onnx_session = rt.InferenceSession(onnx_path)
+
+        self.w_T_b = np.eye(4)
+        self.joint_pos = np.zeros(12)
+        self.joint_vel = np.zeros(12)
+        self.joint_pos_policy = np.zeros(12)
+        self.joint_vel_policy = np.zeros(12)
+
+        self.q0 = np.array([-0.1,  0.8, -1.5, 0.1,  0.8, -1.5,  -0.1,  1., -1.5, 0.1,  1., -1.5])
+
+        # First two elements are 0, third is the forward speed
+        forward_speed = 0.37
+        self.vel_cmd = np.array([0., 0., forward_speed])
+        self.env_class = np.array([1, 0])
+
+        self.action_buffer = deque(maxlen=2)
+        self.depth_buffer = deque(maxlen=2)
+
+        self.depth_latent = np.zeros((1, 32), dtype=np.float32)
+        self.vobs = np.zeros((1, 58, 87), dtype=np.float32)
+        self.yaws = np.zeros((1, 2), dtype=np.float32)
+        self.obs = np.zeros((1, 53), dtype=np.float32)
+        self.obs_history = np.zeros((1, 10, 53), dtype=np.float32)
+        self.rnn_hidden_in = np.zeros((1, 1, 512), dtype=np.float32)
+        self.update_depth = np.zeros((1,1), dtype=np.float32)
+        self.update_yaw = np.ones((1,1), dtype=np.float32)
+        self.step_counter = np.zeros((1,), dtype=np.float32)
+
+        self.actions = np.zeros((1, 12), dtype=np.float32)
+        self.policy_step = 0
+        
+        # LowCmd
+        self.lowcmd = LowCmd()
+
+    def forward(self, lowstate: LowState, im: typing.Optional[Image] = None):
+        if im:
+            im = np.array(im.data).reshape(im.height,im.width)
+            self.vobs[:] = (im / 255.) - 0.5
+            self.update_yaw[:] = 1.0
+            self.update_depth[:] = 1.0
+        else:
+            self.update_yaw[:] = 0.0
+            self.update_depth[:] = 0.0
+
+        contact_states = lowstate.foot_force > 20
+
+        quat = lowstate.imu_state.quaternion
+        roll, pitch, yaw = euler_from_quaternion(quat)
+        imu_obs = np.array([roll, pitch])
+
+        q = np.array([ms.q for ms in lowstate.motor_state])[:12]
+        q -= self.q0
+
+        self.joint_vel[:] = (q - self.joint_pos) * 50. 
+        self.joint_pos[:] = q
+
+        obs_data = [
+            1 * lowstate.imu_state.gyroscope * 0.25, # 3
+            1 * imu_obs, # 2
+            [0.0],
+            1 * self.yaws.squeeze(),
+            1 * self.vel_cmd, # 3
+            1 * self.env_class, # 2
+            1 * self.joint_pos, 
+            1 * (self.joint_vel * 0.05),
+            1 * (self.actions.squeeze()),
+            1 * (contact_states - 0.5)
+        ]
+
+        clip = lambda a: np.clip(a, -100.0, 100.0)
+        self.obs[:] = (
+            np.concatenate(obs_data).reshape(1, 53).astype(np.float32)
+        )
+        self.obs[:] = clip(self.obs)
+        self.step_counter[:] = self.policy_step
+        self.policy_step += 1
+
+        # Policy module
+        inputs = {
+            "depth": clip(self.vobs),
+            "depth_latent_in": self.depth_latent,
+            "yaw_in": clip(self.yaws),
+            "obs_proprio": clip(self.obs),
+            "obs_history_in": clip(self.obs_history),
+            "update_depth": self.update_depth,
+            "update_yaw": self.update_yaw,
+            "hidden_states_in": self.rnn_hidden_in,
+            "step_counter": self.step_counter
+        }
+
+        nn_actions, depth_latent, yaws, obs_history, _ = self.onnx_session.run(
+            ['actions', 'depth_latent_out', 'yaw_out', 'obs_history_out', 'hidden_states_out'], inputs
+        )
+        self.actions[:] = nn_actions.astype(np.float32)
+        self.depth_latent[:] = depth_latent
+        self.yaws[:] = yaws
+        self.obs_history[:] = obs_history
+        # self.rnn_hidden_in[:] = hidden_states_out
+
+        return self.q0 + (np.clip(self.actions.squeeze(), -4.8, 4.8) * .25)
+
 
 class Go2Simulation(Node):
     def __init__(self):
@@ -64,7 +170,6 @@ class Go2Simulation(Node):
         ########################## Camera
         self.camera_period = 1.0 / 10 # seconds
         self.camera_decimation = int(self.camera_period / self.high_level_period)
-        breakpoint()
 
         ########################## Cmd listener
         self.create_subscription(LowCmd, "/lowcmd", self.receive_cmd_cb, 10)
@@ -100,112 +205,7 @@ class Go2Simulation(Node):
         self.sim_time = Time(seconds=0, nanoseconds=0)
         self.time_delta = Duration(seconds=0, nanoseconds=int(self.high_level_period * 1e9))
 
-        self.init_onnx()
-
-    def init_onnx(self):
-        onnx_path = "./models/wall.onnx"
-        onnx_path = "/home/hamlet/Workspace/reinforcement-learning/inference/" + onnx_path
-        self.onnx_session = rt.InferenceSession(onnx_path)
-
-        self.w_T_b = np.eye(4)
-        self.joint_pos = np.zeros(12)
-        self.joint_vel = np.zeros(12)
-        self.joint_pos_policy = np.zeros(12)
-        self.joint_vel_policy = np.zeros(12)
-
-        self.q0 = np.array([-0.1,  0.8, -1.5, 0.1,  0.8, -1.5,  -0.1,  1., -1.5, 0.1,  1., -1.5])
-
-        # First two elements are 0, third is the forward speed
-        forward_speed = 0.37
-        self.vel_cmd = np.array([0., 0., forward_speed])
-        self.env_class = np.array([1, 0])
-
-        self.action_buffer = deque(maxlen=2)
-        self.depth_buffer = deque(maxlen=2)
-
-        self.depth_latent = np.zeros((1, 32), dtype=np.float32)
-        self.vobs = np.zeros((1, 58, 87), dtype=np.float32)
-        self.yaws = np.zeros((1, 2), dtype=np.float32)
-        self.obs = np.zeros((1, 53), dtype=np.float32)
-        self.obs_history = np.zeros((1, 10, 53), dtype=np.float32)
-        self.rnn_hidden_in = np.zeros((1, 1, 512), dtype=np.float32)
-        self.update_depth = np.zeros((1,1), dtype=np.float32)
-        self.update_yaw = np.ones((1,1), dtype=np.float32)
-        self.step_counter = np.zeros((1,), dtype=np.float32)
-
-        self.actions = np.zeros((1, 12), dtype=np.float32)
-
-
-    def forward(self, camera: bool = False):
-        if self.i == 0:
-            return np.zeros(12)
-
-        robot_id = self.simulator.robot
-
-        if camera:
-            im = self.simulator.get_camera_image().astype(np.float32)
-            self.vobs[:] = (im / 255.) - 0.5
-            self.update_yaw[:] = 1.0
-            self.update_depth[:] = 1.0
-        else:
-            self.update_yaw[:] = 0.0
-            self.update_depth[:] = 0.0
-
-        contact_states = self.low_msg.foot_force > 20
-
-        quat = self.low_msg.imu_state.quaternion
-        roll, pitch, yaw = euler_from_quaternion(quat)
-        imu_obs = np.array([roll, pitch])
-
-        q = np.array([ms.q for ms in self.low_msg.motor_state])[:12]
-        q -= self.q0
-
-        self.joint_vel[:] = (q - self.joint_pos) * 50. 
-        self.joint_pos[:] = q
-
-        obs_data = [
-            1 * self.low_msg.imu_state.gyroscope * 0.25, # 3
-            1 * imu_obs, # 2
-            [0.0],
-            1 * self.yaws.squeeze(),
-            1 * self.vel_cmd, # 3
-            1 * self.env_class, # 2
-            1 * self.joint_pos, 
-            1 * (self.joint_vel * 0.05),
-            1 * (self.actions.squeeze()),
-            1 * (contact_states - 0.5)
-        ]
-
-        clip = lambda a: np.clip(a, -100.0, 100.0)
-        self.obs[:] = (
-            np.concatenate(obs_data).reshape(1, 53).astype(np.float32)
-        )
-        self.obs[:] = clip(self.obs)
-        self.step_counter[:] = self.i - 1
-
-        # Policy module
-        inputs = {
-            "depth": clip(self.vobs),
-            "depth_latent_in": self.depth_latent,
-            "yaw_in": clip(self.yaws),
-            "obs_proprio": clip(self.obs),
-            "obs_history_in": clip(self.obs_history),
-            "update_depth": self.update_depth,
-            "update_yaw": self.update_yaw,
-            "hidden_states_in": self.rnn_hidden_in,
-            "step_counter": self.step_counter
-        }
-
-        nn_actions, depth_latent, yaws, obs_history, _ = self.onnx_session.run(
-            ['actions', 'depth_latent_out', 'yaw_out', 'obs_history_out', 'hidden_states_out'], inputs
-        )
-        self.actions[:] = nn_actions.astype(np.float32)
-        self.depth_latent[:] = depth_latent
-        self.yaws[:] = yaws
-        self.obs_history[:] = obs_history
-        # self.rnn_hidden_in[:] = hidden_states_out
-
-        return self.q0 + (np.clip(self.actions.squeeze(), -4.8, 4.8) * .25)
+        self.actor = Actor()
 
 
     def update(self):
@@ -218,10 +218,13 @@ class Go2Simulation(Node):
             kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(12)])
         else:
             # Camera update
-            if self.i % self.camera_decimation == 0:
-                q_des = self.forward(camera=True)
+            if self.i == 0:
+                q_des = np.zeros(12)
+            elif self.i % self.camera_decimation == 0:
+                im = self.camera_update() 
+                q_des = self.actor.forward(self.low_msg, im=im)
             else:
-                q_des = self.forward(camera=False)
+                q_des = self.actor.forward(self.low_msg, im=None)
 
             v_des = np.zeros(12)
             tau_des = np.zeros(12)
@@ -330,12 +333,11 @@ class Go2Simulation(Node):
     def camera_update(self):
         if self.simulator_name == "pybullet":
             im = self.simulator.get_camera_image()
-        else:
-            self.get_logger().warn(f"Camera not implemented for this simulator: {self.simulator_name}")
-
-        if im is not None:
             img_msg = self.bridge.cv2_to_imgmsg(im, encoding="mono8")
             self.depth_publisher.publish(img_msg)
+            return img_msg
+        else:
+            self.get_logger().warn(f"Camera not implemented for this simulator: {self.simulator_name}")
 
     def receive_cmd_cb(self, msg):
         self.last_cmd_msg = msg
