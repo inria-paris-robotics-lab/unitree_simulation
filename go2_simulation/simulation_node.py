@@ -27,7 +27,7 @@ def euler_from_quaternion(quat_angle):
     pitch is rotation around y in radians (counterclockwise)
     yaw is rotation around z in radians (counterclockwise)
     """
-    x, y, z, w = quat_angle
+    w, x, y, z = quat_angle
     t0 = +2.0 * (w * x + y * z)
     t1 = +1.0 - 2.0 * (x * x + y * y)
     roll_x = np.arctan2(t0, t1)
@@ -114,7 +114,6 @@ class Go2Simulation(Node):
         self.joint_vel_policy = np.zeros(12)
 
         self.q0 = np.array([-0.1,  0.8, -1.5, 0.1,  0.8, -1.5,  -0.1,  1., -1.5, 0.1,  1., -1.5])
-        self.q_des = self.q0.copy()
 
         # First two elements are 0, third is the forward speed
         forward_speed = 0.37
@@ -152,30 +151,20 @@ class Go2Simulation(Node):
             self.update_yaw[:] = 0.0
             self.update_depth[:] = 0.0
 
-        w_P_b, w_Q_b = pb.getBasePositionAndOrientation(robot_id)
-
-        w_P_b = np.array(w_P_b, dtype=np.float32)
-        w_R_b = np.array(pb.getMatrixFromQuaternion(w_Q_b), dtype=np.float32).reshape(
-            3, 3
-        )
-
-        self.w_T_b[:3, :3] = w_R_b
-        self.w_T_b[:3, 3] = w_P_b
-
-        _, ang_vel_w = pb.getBaseVelocity(robot_id)
-        ang_vel_b = w_R_b.T @ np.array(ang_vel_w)
         contact_states = self.low_msg.foot_force > 20
 
-        roll, pitch, yaw = euler_from_quaternion(w_Q_b)
+        quat = self.low_msg.imu_state.quaternion
+        roll, pitch, yaw = euler_from_quaternion(quat)
         imu_obs = np.array([roll, pitch])
 
-        q = np.array([ms.q for ms in self.low_msg.motor_state])[:12] - self.q0
+        q = np.array([ms.q for ms in self.low_msg.motor_state])[:12]
+        q -= self.q0
 
         self.joint_vel[:] = (q - self.joint_pos) * 50. 
         self.joint_pos[:] = q
 
         obs_data = [
-            1 * ang_vel_b * 0.25, # 3
+            1 * self.low_msg.imu_state.gyroscope * 0.25, # 3
             1 * imu_obs, # 2
             [0.0],
             1 * self.yaws.squeeze(),
