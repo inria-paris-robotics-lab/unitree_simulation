@@ -160,7 +160,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
             info = pybullet.getDynamicsInfo(bodyUniqueId=box_id, linkIndex=-1)
             pybullet.changeDynamics(bodyUniqueId=box_id, linkIndex=-1, lateralFriction=1.0)
 
-            self.env_ids.append(i)
+            self.env_ids.append(box_id)
 
             self.x_offset += 2 * self.box_half_length
 
