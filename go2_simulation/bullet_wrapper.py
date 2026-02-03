@@ -1,5 +1,5 @@
 import numpy as np
-from go2_description import GO2_DESCRIPTION_URDF_PATH
+from unitree_description import GO2_DESCRIPTION_URDF_PATH
 import pybullet
 import pybullet_data
 from scipy.spatial.transform import Rotation as R
