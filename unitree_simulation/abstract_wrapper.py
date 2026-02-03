@@ -1,6 +1,6 @@
 from typing import Tuple, List
 from abc import ABC, abstractmethod
-from go2_simulation.robots_configuration import RobotConfigurationAbstract
+from unitree_simulation.robots_configuration import RobotConfigurationAbstract
 
 Configuration = List[float]
 Velocities = List[float]

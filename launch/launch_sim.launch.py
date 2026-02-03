@@ -18,7 +18,7 @@ def generate_launch_description():
 
     # Node configuration
     go2_simulation_node = Node(
-        package="go2_simulation",  # Replace with the actual package name
+        package="unitree_simulation",  # Replace with the actual package name
         executable="simulation_node",  # Replace with the actual node executable name
         name="simulation_node",
         output="screen",

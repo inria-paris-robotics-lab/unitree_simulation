@@ -2,7 +2,7 @@ import numpy as np
 import pybullet
 import pybullet_data
 from scipy.spatial.transform import Rotation as R
-from go2_simulation.abstract_wrapper import AbstractSimulatorWrapper
+from unitree_simulation.abstract_wrapper import AbstractSimulatorWrapper
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -29,7 +29,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
         pybullet.resetBasePositionAndOrientation(self.plane_id, [0, 0, 0], [0, 0, 0, 1])
 
         self.ramp_id = pybullet.loadURDF(
-            os.path.join(get_package_share_directory("go2_simulation"), "data/assets/obstacles.urdf")
+            os.path.join(get_package_share_directory("unitree_simulation"), "data/assets/obstacles.urdf")
         )
         self.env_ids.append(self.ramp_id)
 

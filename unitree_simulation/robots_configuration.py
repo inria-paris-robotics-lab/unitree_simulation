@@ -199,5 +199,5 @@ class Go2Configuration(RobotConfigurationAbstract):
         return LowCmdGo2
 
     def foot_force_to_val(self, force):
-        ## See https://github.com/inria-paris-robotics-lab/go2_simulation/issues/6
+        ## See https://github.com/inria-paris-robotics-lab/unitree_simulation/issues/6
         return 14.2 + 0.562 * force

@@ -7,13 +7,13 @@ from scipy.spatial.transform import Rotation as R
 
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
-from go2_simulation.abstract_wrapper import AbstractSimulatorWrapper
-from go2_simulation.robots_configuration import RobotConfigurationAbstract
+from unitree_simulation.abstract_wrapper import AbstractSimulatorWrapper
+from unitree_simulation.robots_configuration import RobotConfigurationAbstract
 
 
-class Go2Simulation(Node):
+class UnitreeSimulation(Node):
     def __init__(self):
-        super().__init__("go2_simulation")
+        super().__init__("unitree_simulation")
         simulator_name = self.declare_parameter("simulator", rclpy.Parameter.Type.STRING).value
         robot_name = self.declare_parameter("robot", rclpy.Parameter.Type.STRING).value
         self.unlock_base_default = self.declare_parameter("unlock_base", rclpy.Parameter.Type.BOOL).value
@@ -25,11 +25,11 @@ class Go2Simulation(Node):
 
         self.robot: RobotConfigurationAbstract = None
         if robot_name.lower() == "g1":
-            from go2_simulation.robots_configuration import G1Configuration
+            from unitree_simulation.robots_configuration import G1Configuration
 
             self.robot = G1Configuration()
         elif robot_name.lower() == "go2":
-            from go2_simulation.robots_configuration import Go2Configuration
+            from unitree_simulation.robots_configuration import Go2Configuration
 
             self.robot = Go2Configuration()
         else:
@@ -39,11 +39,11 @@ class Go2Simulation(Node):
         ########################## Simulator
         self.simulator: AbstractSimulatorWrapper = None
         if simulator_name == "simple":
-            from go2_simulation.simple_wrapper import SimpleWrapper
+            from unitree_simulation.simple_wrapper import SimpleWrapper
 
             self.simulator = SimpleWrapper(self.robot)
         elif simulator_name == "pybullet":
-            from go2_simulation.bullet_wrapper import BulletWrapper
+            from unitree_simulation.bullet_wrapper import BulletWrapper
 
             self.simulator = BulletWrapper(self.robot)
         else:
@@ -194,12 +194,12 @@ class Go2Simulation(Node):
 def main(args=None):
     rclpy.init(args=args)
     try:
-        go2_simulation = Go2Simulation()
-        rclpy.spin(go2_simulation)
+        unitree_simulation = UnitreeSimulation()
+        rclpy.spin(unitree_simulation)
     except rclpy.exceptions.ROSInterruptException:
         pass
 
-    go2_simulation.destroy_node()
+    unitree_simulation.destroy_node()
     rclpy.shutdown()
 
 

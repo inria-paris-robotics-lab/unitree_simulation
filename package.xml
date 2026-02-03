@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>go2_simulation</name>
+  <name>unitree_simulation</name>
   <version>1.0.0</version>
   <description>Basic simulator wrapper to mimic real Go2 ROS2 control API.</description>
   <maintainer email="earlaud@inria.fr">EtienneAr</maintainer>

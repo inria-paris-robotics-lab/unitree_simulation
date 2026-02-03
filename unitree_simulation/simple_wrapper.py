@@ -4,7 +4,7 @@ from unitree_description import GO2_DESCRIPTION_SRDF_PATH
 import hppfcl
 import pinocchio as pin
 import simple
-from go2_simulation.abstract_wrapper import AbstractSimulatorWrapper
+from unitree_simulation.abstract_wrapper import AbstractSimulatorWrapper
 import threading
 import queue
 
