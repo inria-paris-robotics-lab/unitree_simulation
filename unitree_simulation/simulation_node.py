@@ -113,7 +113,7 @@ class UnitreeSimulation(Node):
 
         # Contact sensors reading
         if len(self.robot.feet_sensors_names) > 0:
-            low_msg.foot_force = [self.robot.foot_force_to_val(force) for force in self.f_current]
+            low_msg.foot_force = [int(self.robot.foot_force_to_val(force)) for force in self.f_current]
 
         # Format IMU
         quat_xyzw = self.q_current[3:7].tolist()
