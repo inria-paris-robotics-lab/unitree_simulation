@@ -1,9 +1,11 @@
 import rclpy
 from rclpy.node import Node
-from unitree_go.msg import LowState, LowCmd
+from std_msgs.msg import Empty
 from nav_msgs.msg import Odometry
+from unitree_go.msg import LowState, LowCmd
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+
 
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
@@ -14,6 +16,7 @@ class Go2Simulation(Node):
     def __init__(self):
         super().__init__("go2_simulation")
         simulator_name = self.declare_parameter("simulator", rclpy.Parameter.Type.STRING).value
+        self.unlock_base_default = self.declare_parameter("unlock_base", rclpy.Parameter.Type.BOOL).value
 
         ########################### State publisher
         self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
@@ -43,7 +46,20 @@ class Go2Simulation(Node):
 
             self.simulator = BulletWrapper(self, timestep)
         else:
-            self.get_logger().error("Simulation tool not recognized")
+            self.get_logger().error("Simulation tool not recognized, please set parameter to 'simple' or 'pybullet'.")
+            exit()
+
+        ########################## Unlock base
+        if self.unlock_base_default is None:
+            self.get_logger().error("Parameter 'unlock_base' not set!")
+            exit()
+
+        if self.unlock_base_default:
+            self.unlock_base()
+        else:
+            self.create_subscription(Empty, "/unlock_base", lambda msg: self.unlock_base(), 1)
+
+        self.create_subscription(Empty, "/reset", lambda msg: self.reset(), 1)
 
         ########################## Initial state
         self.q_current = np.zeros(7 + 12)
@@ -151,6 +167,15 @@ class Go2Simulation(Node):
 
     def receive_cmd_cb(self, msg):
         self.last_cmd_msg = msg
+
+    def reset(self):
+        self.simulator.reset()
+        if self.unlock_base_default:
+            self.simulator.unlock_base()
+
+    def unlock_base(self):
+        self.get_logger().info("Unlocking robot base")
+        self.simulator.unlock_base()
 
 
 def main(args=None):
