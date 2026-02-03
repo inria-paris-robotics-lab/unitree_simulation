@@ -1,5 +1,4 @@
 import numpy as np
-from unitree_description import GO2_DESCRIPTION_URDF_PATH
 import pybullet
 import pybullet_data
 from scipy.spatial.transform import Rotation as R
@@ -9,9 +8,7 @@ import os
 
 
 class BulletWrapper(AbstractSimulatorWrapper):
-    def __init__(self, node, timestep):
-        self.node = node
-
+    def __init__(self, robot_config):
         # init pybullet
         cid = pybullet.connect(pybullet.SHARED_MEMORY)
         if cid < 0:
@@ -20,7 +17,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
             pybullet.connect(pybullet.GUI)
 
         # Load robot
-        self.robot = pybullet.loadURDF(GO2_DESCRIPTION_URDF_PATH, [0, 0, 0.4])
+        self.robot = pybullet.loadURDF(robot_config.urdf_path, [0, 0, 0.4])
         self.localInertiaPos = pybullet.getDynamicsInfo(self.robot, -1)[3]
 
         # Load ground plane and other obstacles
@@ -37,38 +34,24 @@ class BulletWrapper(AbstractSimulatorWrapper):
         self.env_ids.append(self.ramp_id)
 
         # Set time step
-        pybullet.setTimeStep(timestep)
+        pybullet.setTimeStep(robot_config.sim_dt)
 
         # Prepare joint ordering
-        self.joint_name_unitree_order = [
-            "FR_hip_joint",
-            "FR_thigh_joint",
-            "FR_calf_joint",
-            "FL_hip_joint",
-            "FL_thigh_joint",
-            "FL_calf_joint",
-            "RR_hip_joint",
-            "RR_thigh_joint",
-            "RR_calf_joint",
-            "RL_hip_joint",
-            "RL_thigh_joint",
-            "RL_calf_joint",
-        ]
-        self.joint_bullet_id = [self.get_joint_id(joint_name) for joint_name in self.joint_name_unitree_order]
+        self.joint_names_output_order = robot_config.joint_names
+        self.joint_bullet_id = [self.get_joint_id(joint_name) for joint_name in self.joint_names_output_order]
 
         # Default configuration
-        self.q_start = [0, 0, 0.25, 0, 0, 0, 1] + [0.0, 1.0, -2.0] * 4
+        self.q_start = robot_config.q_start
 
         # Feet ids
         num_joints = pybullet.getNumJoints(self.robot)
-        feet_names = [name + "_foot" for name in ("FR", "FL", "RR", "RL")]
-        self.feet_idx = [-1] * len(feet_names)
+        self.feet_idx = [-1] * len(robot_config.feet_sensors_names)
 
         for i in range(num_joints):
             joint_info = pybullet.getJointInfo(self.robot, i)
             link_name = joint_info[12].decode("utf-8")
-            if link_name in feet_names:
-                foot_id = feet_names.index(link_name)
+            if link_name in robot_config.feet_sensors_names:
+                foot_id = robot_config.feet_sensors_names.index(link_name)
                 self.feet_idx[foot_id] = (i, link_name)
 
         # gravity and feet friction
@@ -78,7 +61,7 @@ class BulletWrapper(AbstractSimulatorWrapper):
         self.fixed_base_constraint = None
 
         # Finite differences to compute acceleration
-        self.dt = timestep
+        self.dt = robot_config.sim_dt
         self.v_last = None
 
         # Robot to initial state
