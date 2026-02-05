@@ -7,5 +7,4 @@ Dependencies
 
 * The **unitree_ros** stack (please find instructions, [here](https://github.com/unitreerobotics/unitree_ros2/tree/master)).
 * [unitree_description](https://github.com/inria-paris-robotics-lab/unitree_description) : Custom package containing robot model
-* (optional) Pybullet
-* (optional) [Simple](https://github.com/Simple-Robotics/Simple)
+* Pybullet
