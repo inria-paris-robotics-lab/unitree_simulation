@@ -38,11 +38,7 @@ class UnitreeSimulation(Node):
 
         ########################## Simulator
         self.simulator: AbstractSimulatorWrapper = None
-        if simulator_name == "simple":
-            from unitree_simulation.simple_wrapper import SimpleWrapper
-
-            self.simulator = SimpleWrapper(self.robot)
-        elif simulator_name == "pybullet":
+        if simulator_name == "pybullet":
             from unitree_simulation.bullet_wrapper import BulletWrapper
 
             self.simulator = BulletWrapper(self.robot)
