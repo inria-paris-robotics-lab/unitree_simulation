@@ -7,7 +7,7 @@
   <maintainer email="earlaud@inria.fr">EtienneAr</maintainer>
   <license>TODO: License declaration</license>
 
-  <depend>go2_description</depend>
+  <depend>unitree_description</depend>
   <depend>simple</depend>
   <depend>pybullet</depend>
   <depend>pinocchio</depend>

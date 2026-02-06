@@ -1,6 +1,6 @@
 import numpy as np
-from go2_description.loader import loadGo2
-from go2_description import GO2_DESCRIPTION_SRDF_PATH
+from unitree_description.loader import loadGo2
+from unitree_description import GO2_DESCRIPTION_SRDF_PATH
 import hppfcl
 import pinocchio as pin
 import simple
