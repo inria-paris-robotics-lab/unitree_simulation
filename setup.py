@@ -1,7 +1,7 @@
 from setuptools import setup
 from glob import glob
 
-package_name = "go2_simulation"
+package_name = "unitree_simulation"
 
 setup(
     name=package_name,
@@ -22,7 +22,7 @@ setup(
     license="TODO: License declaration",
     entry_points={
         "console_scripts": [
-            "simulation_node = go2_simulation.simulation_node:main",
+            "simulation_node = unitree_simulation.simulation_node:main",
         ],
     },
 )

@@ -2,52 +2,64 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Empty
 from nav_msgs.msg import Odometry
-from unitree_go.msg import LowState, LowCmd
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
-from go2_simulation.abstract_wrapper import AbstractSimulatorWrapper
+from unitree_simulation.abstract_wrapper import AbstractSimulatorWrapper
+from unitree_simulation.robots_configuration import RobotConfigurationAbstract
 
 
-class Go2Simulation(Node):
+class UnitreeSimulation(Node):
     def __init__(self):
-        super().__init__("go2_simulation")
+        super().__init__("unitree_simulation")
         simulator_name = self.declare_parameter("simulator", rclpy.Parameter.Type.STRING).value
+        robot_name = self.declare_parameter("robot", rclpy.Parameter.Type.STRING).value
         self.unlock_base_default = self.declare_parameter("unlock_base", rclpy.Parameter.Type.BOOL).value
 
-        ########################### State publisher
-        self.lowstate_publisher = self.create_publisher(LowState, "/lowstate", 10)
-        self.odometry_publisher = self.create_publisher(Odometry, "/odometry/filtered", 10)
-        self.tf_broadcaster = TransformBroadcaster(self)
+        ########################## Robot configuration
+        if robot_name is None:
+            self.get_logger().error("No robot type provided, please set parameter to 'robot'.")
+            exit()
 
-        # Timer to publish periodically
-        self.high_level_period = 1.0 / 500  # seconds
-        self.low_level_sub_step = 12
-        self.timer = self.create_timer(self.high_level_period, self.update)
+        self.robot: RobotConfigurationAbstract = None
+        if robot_name.lower() == "g1":
+            from unitree_simulation.robots_configuration import G1Configuration
 
-        ########################## Cmd listener
-        self.create_subscription(LowCmd, "/lowcmd", self.receive_cmd_cb, 10)
-        self.last_cmd_msg = LowCmd()
+            self.robot = G1Configuration()
+        elif robot_name.lower() == "go2":
+            from unitree_simulation.robots_configuration import Go2Configuration
+
+            self.robot = Go2Configuration()
+        else:
+            self.get_logger().error("Robot name not recognized, please set parameter to 'g1' or 'go2'.")
+            exit()
 
         ########################## Simulator
-        self.get_logger().info("go2_simulator::loading simulator")
-        timestep = self.high_level_period / self.low_level_sub_step
-
         self.simulator: AbstractSimulatorWrapper = None
-        if simulator_name == "simple":
-            from go2_simulation.simple_wrapper import SimpleWrapper
+        if simulator_name == "pybullet":
+            from unitree_simulation.bullet_wrapper import BulletWrapper
 
-            self.simulator = SimpleWrapper(self, timestep)
-        elif simulator_name == "pybullet":
-            from go2_simulation.bullet_wrapper import BulletWrapper
-
-            self.simulator = BulletWrapper(self, timestep)
+            self.simulator = BulletWrapper(self.robot)
         else:
             self.get_logger().error("Simulation tool not recognized, please set parameter to 'simple' or 'pybullet'.")
             exit()
+
+        ########################## Initial state
+        self.q_current = np.zeros(7 + self.robot.n_dof)
+        self.v_current = np.zeros(6 + self.robot.n_dof)
+        self.a_current = np.zeros(6 + self.robot.n_dof)
+        self.f_current = np.zeros(len(self.robot.feet_sensors_names))
+
+        ########################### State publisher
+        self.lowstate_publisher = self.create_publisher(self.robot.lowstate_msgs_type, "/lowstate", 10)
+        self.odometry_publisher = self.create_publisher(Odometry, "/odometry/filtered", 10)
+        self.tf_broadcaster = TransformBroadcaster(self)
+
+        ########################## Cmd listener
+        self.create_subscription(self.robot.lowcmd_msgs_type, "/lowcmd", self.receive_cmd_cb, 10)
+        self.last_cmd_msg = self.robot.lowcmd_msgs_type()
 
         ########################## Unlock base
         if self.unlock_base_default is None:
@@ -61,21 +73,18 @@ class Go2Simulation(Node):
 
         self.create_subscription(Empty, "/reset", lambda msg: self.reset(), 1)
 
-        ########################## Initial state
-        self.q_current = np.zeros(7 + 12)
-        self.v_current = np.zeros(6 + 12)
-        self.a_current = np.zeros(6 + 12)
-        self.f_current = np.zeros(4)
+        ########################## Update loop
+        self.timer = self.create_timer(self.robot.high_level_period, self.update)
 
     def update(self):
         ## Control robot
-        q_des = np.array([self.last_cmd_msg.motor_cmd[i].q for i in range(12)])
-        v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq for i in range(12)])
-        tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(12)])
-        kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp for i in range(12)])
-        kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(12)])
+        q_des = np.array([self.last_cmd_msg.motor_cmd[i].q for i in range(self.robot.n_dof)])
+        v_des = np.array([self.last_cmd_msg.motor_cmd[i].dq for i in range(self.robot.n_dof)])
+        tau_des = np.array([self.last_cmd_msg.motor_cmd[i].tau for i in range(self.robot.n_dof)])
+        kp_des = np.array([self.last_cmd_msg.motor_cmd[i].kp for i in range(self.robot.n_dof)])
+        kd_des = np.array([self.last_cmd_msg.motor_cmd[i].kd for i in range(self.robot.n_dof)])
 
-        for _ in range(self.low_level_sub_step):
+        for _ in range(self.robot.low_level_sub_step):
             # Iterate to simulate motor internal controller
             tau_cmd = (
                 tau_des
@@ -86,21 +95,21 @@ class Go2Simulation(Node):
             self.q_current, self.v_current, self.a_current, self.f_current = self.simulator.step(tau_cmd)
 
         ## Send proprioceptive measures (LowState)
-        low_msg = LowState()
+        low_msg = self.robot.lowstate_msgs_type()
         odometry_msg = Odometry()
         transform_msg = TransformStamped()
 
         timestamp = self.get_clock().now().to_msg()
 
         # Format motor readings
-        for joint_idx in range(12):
+        for joint_idx in range(self.robot.n_dof):
             low_msg.motor_state[joint_idx].mode = 1
             low_msg.motor_state[joint_idx].q = self.q_current[7 + joint_idx]
             low_msg.motor_state[joint_idx].dq = self.v_current[6 + joint_idx]
 
         # Contact sensors reading
-        ## See https://github.com/inria-paris-robotics-lab/go2_simulation/issues/6
-        low_msg.foot_force = (14.2 * np.ones(4) + 0.562 * self.f_current).astype(np.int32).tolist()
+        if len(self.robot.feet_sensors_names) > 0:
+            low_msg.foot_force = [int(self.robot.foot_force_to_val(force)) for force in self.f_current]
 
         # Format IMU
         quat_xyzw = self.q_current[3:7].tolist()
@@ -160,7 +169,7 @@ class Go2Simulation(Node):
 
         # Check that the simulator is on time
         if self.timer.time_until_next_call() < 0:
-            ratio = 1.0 - self.timer.time_until_next_call() * 1e-9 / self.high_level_period
+            ratio = 1.0 - self.timer.time_until_next_call() * 1e-9 / self.robot.high_level_period
             self.get_logger().warn(
                 "Simulator running slower than real time! Real time ratio : %.2f " % ratio, throttle_duration_sec=0.1
             )
@@ -181,12 +190,12 @@ class Go2Simulation(Node):
 def main(args=None):
     rclpy.init(args=args)
     try:
-        go2_simulation = Go2Simulation()
-        rclpy.spin(go2_simulation)
+        unitree_simulation = UnitreeSimulation()
+        rclpy.spin(unitree_simulation)
     except rclpy.exceptions.ROSInterruptException:
         pass
 
-    go2_simulation.destroy_node()
+    unitree_simulation.destroy_node()
     rclpy.shutdown()
 
 
