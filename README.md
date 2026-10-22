@@ -18,10 +18,10 @@ ros2 launch unitree_simulation launch_simulation.py robot:=<go2/g1>
 
 Unlock the base of the robot :
 ```bash
-ros2 topic pub /unlock_base std_msgs/msg/Empty --once 
+ros2 topic pub /unlock_base std_msgs/msg/Empty --once
 ```
 
 Reset the simulation:
 ```bash
-ros2 topic pub /unlock_base std_msgs/msg/Empty --once 
+ros2 topic pub /unlock_base std_msgs/msg/Empty --once
 ```
