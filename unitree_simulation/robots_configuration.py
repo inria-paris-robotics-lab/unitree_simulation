@@ -1,4 +1,8 @@
-from unitree_description import GO2_DESCRIPTION_URDF_PATH, G1_DESCRIPTION_URDF_PATH
+from unitree_description import (
+    GO2_DESCRIPTION_URDF_PATH,
+    G1_LOCKED_WAIST_DESCRIPTION_URDF_PATH,
+    G1_UNLOCKED_WAIST_DESCRIPTION_URDF_PATH,
+)
 from abc import ABC, abstractmethod
 from unitree_go.msg import LowState as LowStateGo2, LowCmd as LowCmdGo2
 from unitree_hg.msg import LowState as LowStateG1, LowCmd as LowCmdG1
@@ -66,7 +70,8 @@ class RobotConfigurationAbstract(ABC):
 
 
 class G1Configuration(RobotConfigurationAbstract):
-    def __init__(self):
+    def __init__(self, locked_waist: bool):
+        self._locked_waist = locked_waist
         joint_name_unitree_order = [
             "left_hip_pitch_joint",
             "left_hip_roll_joint",
@@ -120,7 +125,11 @@ class G1Configuration(RobotConfigurationAbstract):
 
     @property
     def urdf_path(self) -> str:
-        return G1_DESCRIPTION_URDF_PATH
+        return G1_LOCKED_WAIST_DESCRIPTION_URDF_PATH if self._locked_waist else G1_UNLOCKED_WAIST_DESCRIPTION_URDF_PATH
+
+    @property
+    def locked_waist(self) -> List[float]:
+        return self._locked_waist
 
     @property
     def q_start(self) -> List[float]:
