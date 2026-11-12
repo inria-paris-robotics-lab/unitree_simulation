@@ -12,7 +12,8 @@ Dependencies
 # Usage
 Launch the simulation (GO2 or G1):
 ```bash
-ros2 launch unitree_simulation launch_simulation.py robot:=<go2/g1>
+ros2 launch unitree_simulation launch_simulation.py robot:=<go2/g1> lock_waist:=<True/False>
+# lock_waist is for g1 only
 ```
 ### In another terminal:
 
