@@ -1,4 +1,8 @@
-from unitree_description import GO2_DESCRIPTION_URDF_PATH, G1_LOCKED_WAIST_DESCRIPTION_URDF_PATH, G1_UNLOCKED_WAIST_DESCRIPTION_URDF_PATH
+from unitree_description import (
+    GO2_DESCRIPTION_URDF_PATH,
+    G1_LOCKED_WAIST_DESCRIPTION_URDF_PATH,
+    G1_UNLOCKED_WAIST_DESCRIPTION_URDF_PATH,
+)
 from abc import ABC, abstractmethod
 from unitree_go.msg import LowState as LowStateGo2, LowCmd as LowCmdGo2
 from unitree_hg.msg import LowState as LowStateG1, LowCmd as LowCmdG1
