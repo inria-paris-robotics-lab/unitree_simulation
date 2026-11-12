@@ -16,6 +16,7 @@ class UnitreeSimulation(Node):
         super().__init__("unitree_simulation")
         simulator_name = self.declare_parameter("simulator", rclpy.Parameter.Type.STRING).value
         robot_name = self.declare_parameter("robot", rclpy.Parameter.Type.STRING).value
+        lock_waist = self.declare_parameter("lock_waist", rclpy.Parameter.Type.BOOL).value
         self.unlock_base_default = self.declare_parameter("unlock_base", rclpy.Parameter.Type.BOOL).value
 
         ########################## Robot configuration
@@ -27,7 +28,7 @@ class UnitreeSimulation(Node):
         if robot_name.lower() == "g1":
             from unitree_simulation.robots_configuration import G1Configuration
 
-            self.robot = G1Configuration()
+            self.robot = G1Configuration(lock_waist)
         elif robot_name.lower() == "go2":
             from unitree_simulation.robots_configuration import Go2Configuration
 

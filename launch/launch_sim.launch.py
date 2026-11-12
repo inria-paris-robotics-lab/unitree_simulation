@@ -7,18 +7,21 @@ from launch_ros.actions import Node
 
 from launch import LaunchDescription
 
+from unitree_description import GO2_DESCRIPTION_URDF_PATH, G1_LOCKED_WAIST_DESCRIPTION_URDF_PATH, G1_UNLOCKED_WAIST_DESCRIPTION_URDF_PATH
 
 def launch_setup(context, *args, **kwargs):
     # Conditional URDF file depending on robot launch argument
     robot_arg_value = LaunchConfiguration("robot").perform(context)
-    pkg_path = get_package_share_directory("unitree_description")
+    lock_waist_arg_value = LaunchConfiguration("lock_waist").perform(context)
 
+    # map the differents launch options to the correct URDFs
     urdf_map = {
-        "g1": "g1/g1.urdf",
-        "go2": "go2/go2.urdf",
+        "g1_True": G1_LOCKED_WAIST_DESCRIPTION_URDF_PATH,
+        "g1_False": G1_UNLOCKED_WAIST_DESCRIPTION_URDF_PATH,
+        "go2": GO2_DESCRIPTION_URDF_PATH,
     }
-    urdf_file = urdf_map.get(str(robot_arg_value))
-    urdf_path = os.path.join(pkg_path, "model", urdf_file)
+    urdf_path = urdf_map.get(str(robot_arg_value)+"_"+str(lock_waist_arg_value))
+
     with open(urdf_path, "r") as f:
         robot_description = f.read()
 
@@ -39,6 +42,7 @@ def launch_setup(context, *args, **kwargs):
             {
                 "simulator": LaunchConfiguration("simulator"),
                 "robot": LaunchConfiguration("robot"),
+                "lock_waist" : LaunchConfiguration("lock_waist"),
                 "unlock_base": LaunchConfiguration("unlock_base"),
             }
         ],
@@ -55,9 +59,13 @@ def generate_launch_description():
 
     robot_arg = DeclareLaunchArgument("robot", description="Which robot to simulate 'go2' or 'g1'")
 
+    lock_waist_arg = DeclareLaunchArgument(
+        "lock_waist",
+        description="Whether to unlock or not the pitch and roll waist DOF, False by default")
+
     unlock_base_arg = DeclareLaunchArgument(
         "unlock_base",
         default_value="False",
         description="should the robot base be free from start, or should it simulate being hanged first",
     )
-    return LaunchDescription([simulator_arg, robot_arg, unlock_base_arg, OpaqueFunction(function=launch_setup)])
+    return LaunchDescription([simulator_arg, robot_arg, lock_waist_arg, unlock_base_arg, OpaqueFunction(function=launch_setup)])
